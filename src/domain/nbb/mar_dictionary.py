@@ -1,0 +1,105 @@
+"""
+MAR Dictionary — All 80 BE-GAAP codes with English labels
+Used by volledig_builder to populate MAR_Dictionary sheet
+"""
+
+MAR_DICT = [
+    # code, label_en, section, subsection, priority
+    # ── BALANCE SHEET — ASSETS ──────────────────────────────────────────────
+    ("20/58",   "TOTAL ASSETS",                                     "BS_A", "Total",        "HIGH"),
+    ("20/28",   "Fixed Assets",                                     "BS_A", "Fixed",        "HIGH"),
+    ("21",      "Intangible Fixed Assets",                          "BS_A", "Fixed",        "MED"),
+    ("22/27",   "Tangible Fixed Assets",                            "BS_A", "Fixed",        "HIGH"),
+    ("22",      "Land & Buildings",                                  "BS_A", "Fixed",        "MED"),
+    ("23",      "Plant, Machinery & Equipment",                     "BS_A", "Fixed",        "MED"),
+    ("24",      "Furniture & Vehicles",                             "BS_A", "Fixed",        "MED"),
+    ("26",      "Leasing & Similar Rights",                         "BS_A", "Fixed",        "LOW"),
+    ("27",      "Other Tangible Fixed Assets",                      "BS_A", "Fixed",        "LOW"),
+    ("28",      "Financial Fixed Assets",                           "BS_A", "Fixed",        "MED"),
+    ("280/1",   "Investments in Subsidiaries",                      "BS_A", "Fixed",        "LOW"),
+    ("284/5",   "Investments in Other Companies",                   "BS_A", "Fixed",        "LOW"),
+    ("29/58",   "Current Assets",                                   "BS_A", "Current",      "HIGH"),
+    ("3",       "Inventories & Work in Progress",                   "BS_A", "Current",      "HIGH"),
+    ("30/36",   "Inventories",                                      "BS_A", "Current",      "MED"),
+    ("37",      "Work in Progress",                                  "BS_A", "Current",      "MED"),
+    ("40/41",   "Trade & Other Receivables (≤1yr)",                 "BS_A", "Current",      "HIGH"),
+    ("40",      "Trade Receivables",                                 "BS_A", "Current",      "HIGH"),
+    ("41",      "Other Receivables (≤1yr)",                         "BS_A", "Current",      "MED"),
+    ("50/53",   "Cash & Cash Equivalents",                          "BS_A", "Current",      "HIGH"),
+    ("490/1",   "Deferred Charges & Accrued Income",                "BS_A", "Current",      "LOW"),
+    # ── BALANCE SHEET — LIABILITIES & EQUITY ────────────────────────────────
+    ("10/49",   "TOTAL LIABILITIES & EQUITY",                       "BS_L", "Total",        "HIGH"),
+    ("10/15",   "Equity",                                           "BS_L", "Equity",       "HIGH"),
+    ("10",      "Share Capital",                                    "BS_L", "Equity",       "MED"),
+    ("100",     "Issued Capital",                                   "BS_L", "Equity",       "LOW"),
+    ("101",     "Uncalled Capital (–)",                             "BS_L", "Equity",       "LOW"),
+    ("11",      "Share Premium",                                    "BS_L", "Equity",       "LOW"),
+    ("12",      "Revaluation Surplus",                              "BS_L", "Equity",       "LOW"),
+    ("13",      "Reserves",                                         "BS_L", "Equity",       "MED"),
+    ("130",     "Legal Reserve",                                    "BS_L", "Equity",       "LOW"),
+    ("132",     "Unavailable Reserves",                             "BS_L", "Equity",       "LOW"),
+    ("133",     "Tax-exempt Reserves",                              "BS_L", "Equity",       "LOW"),
+    ("134",     "Available Reserves",                               "BS_L", "Equity",       "LOW"),
+    ("14",      "Retained Earnings (Loss)",                         "BS_L", "Equity",       "HIGH"),
+    ("15",      "Capital Subsidies",                                "BS_L", "Equity",       "LOW"),
+    ("16",      "Provisions & Deferred Taxes",                      "BS_L", "LT Debt",      "MED"),
+    ("17",      "Long-term Debts (>1yr)",                           "BS_L", "LT Debt",      "HIGH"),
+    ("170/4",   "Financial Debts >1yr",                             "BS_L", "LT Debt",      "HIGH"),
+    ("175",     "Trade Debts >1yr",                                 "BS_L", "LT Debt",      "LOW"),
+    ("178/9",   "Other Debts >1yr",                                 "BS_L", "LT Debt",      "LOW"),
+    ("42/48",   "Current Liabilities (≤1yr)",                       "BS_L", "ST Debt",      "HIGH"),
+    ("42/43",   "Financial Debts ≤1yr",                             "BS_L", "ST Debt",      "HIGH"),
+    ("44",      "Trade Payables ≤1yr",                              "BS_L", "ST Debt",      "HIGH"),
+    ("440/4",   "Suppliers",                                        "BS_L", "ST Debt",      "MED"),
+    ("441",     "Bills of Exchange Payable",                        "BS_L", "ST Debt",      "LOW"),
+    ("45",      "Tax & Social Security Payables",                   "BS_L", "ST Debt",      "MED"),
+    ("46",      "Advances Received",                                "BS_L", "ST Debt",      "LOW"),
+    ("47/48",   "Other Current Liabilities",                        "BS_L", "ST Debt",      "MED"),
+    ("492/3",   "Accrued Charges & Deferred Income",                "BS_L", "ST Debt",      "LOW"),
+    # ── INCOME STATEMENT ────────────────────────────────────────────────────
+    ("70/76A",  "TOTAL OPERATING INCOME",                           "IS",   "Revenue",      "HIGH"),
+    ("70",      "Revenue (Turnover)",                               "IS",   "Revenue",      "HIGH"),
+    ("71",      "Changes in Inventories & WIP",                     "IS",   "Revenue",      "MED"),
+    ("72",      "Own Construction Capitalised",                     "IS",   "Revenue",      "LOW"),
+    ("74",      "Other Operating Income",                           "IS",   "Revenue",      "MED"),
+    ("75",      "Financial Income",                                 "IS",   "Finance",      "MED"),
+    ("60/66A",  "TOTAL OPERATING EXPENSES",                         "IS",   "OpEx",         "HIGH"),
+    ("60/61",   "Purchases of Goods & Services",                    "IS",   "OpEx",         "MED"),
+    ("60",      "Purchases of Raw Materials & Goods",               "IS",   "OpEx",         "HIGH"),
+    ("61",      "Services & Other Goods",                           "IS",   "OpEx",         "HIGH"),
+    ("62",      "Salaries, Social Charges & Pensions",              "IS",   "OpEx",         "HIGH"),
+    ("630",     "Depreciation & Amortisation",                      "IS",   "OpEx",         "HIGH"),
+    ("631/4",   "Impairment of Current Assets",                     "IS",   "OpEx",         "MED"),
+    ("635/8",   "Provisions for Risks & Charges",                   "IS",   "OpEx",         "LOW"),
+    ("640/8",   "Other Operating Expenses",                         "IS",   "OpEx",         "MED"),
+    ("65",      "Financial Expenses",                               "IS",   "Finance",      "MED"),
+    ("67",      "Income Taxes",                                     "IS",   "Tax",          "HIGH"),
+    ("9901",    "Operating Result (EBIT)",                          "IS",   "KPI",          "HIGH"),
+    ("9903",    "Profit (Loss) Before Tax (EBT)",                   "IS",   "KPI",          "HIGH"),
+    ("9904",    "Net Profit (Loss) for the Period",                 "IS",   "KPI",          "HIGH"),
+    ("9905",    "Profit (Loss) Available for Appropriation",        "IS",   "KPI",          "HIGH"),
+    # ── APPROPRIATION ───────────────────────────────────────────────────────
+    ("690",     "Profit (Loss) Carried Forward",                    "IS_X", "Appropriation","LOW"),
+    ("691",     "Dividends Paid",                                   "IS_X", "Appropriation","MED"),
+    ("694",     "Transfer to Legal Reserve",                        "IS_X", "Appropriation","LOW"),
+    ("694/6",   "Transfer to Reserves",                             "IS_X", "Appropriation","LOW"),
+    ("696",     "Other Reserves",                                   "IS_X", "Appropriation","LOW"),
+    # ── WORKFORCE ───────────────────────────────────────────────────────────
+    ("9087",    "Average FTE (Full-Time Equivalents)",              "WORKERS","Count",      "HIGH"),
+    ("9086",    "Total Staff Costs",                                "WORKERS","Headcount",  "HIGH"),
+    ("9088",    "Total Hours Worked (annual)",                     "WORKERS","Count",      "MED"),
+    ("1023",    "Full-Time Wages (component of code 62)",           "WORKERS","EUR",        "LOW"),
+    ("1024",    "Part-Time Wages (component of code 62)",           "WORKERS","EUR",        "LOW"),
+]
+
+# Lookup dict: code → (label_en, section, subsection, priority)
+MAR_LOOKUP = {row[0]: row[1:] for row in MAR_DICT}
+
+SECTION_ORDER = ["BS_A", "BS_L", "IS", "IS_X", "WORKERS"]
+SECTION_LABELS = {
+    "BS_A":    "BALANCE SHEET — ASSETS",
+    "BS_L":    "BALANCE SHEET — LIABILITIES & EQUITY",
+    "IS":      "INCOME STATEMENT",
+    "IS_X":    "PROFIT APPROPRIATION",
+    "WORKERS": "WORKFORCE",
+}

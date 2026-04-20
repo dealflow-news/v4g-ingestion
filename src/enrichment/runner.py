@@ -26,8 +26,10 @@ logging.basicConfig(
 
 # Worker registry — enrichment_type → worker function
 # Populated as workers land in Phase 2+
-WORKER_REGISTRY: dict[str, Callable[[dict], dict]] = {
-    # 'nbb_financials': nbb_financials_worker,   # Phase 2
+from src.enrichment.workers import nbb_financials as _nbb_worker  # noqa: E402
+
+WORKER_REGISTRY: dict[str, Callable[..., dict]] = {
+    "nbb_financials": _nbb_worker.run_for_party,
     # 'kbo_directors':  kbo_directors_worker,    # Phase 3
     # 'actor_classification': actor_classification_worker,  # Phase 4
 }
