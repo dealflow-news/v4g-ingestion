@@ -9,18 +9,21 @@ Entry point: run_for_party(party_id, kbo)
   - Converts to FinancialFact models (validated)
   - Writes via FinancialsWriter
 
-Fetcher / parser imports come from src.domain.nbb; they are the verbatim
-port of v4g_accounts modules. No network dependencies at import time.
+Fetcher imports come from src.domain.nbb; they are the verbatim port
+of v4g_accounts modules. Old-format XBRL (pre-2021 manual ZIP uploads)
+is not yet wired — that path needs a separate upload UI.
 """
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
 from src.canonical.financials import FinancialFact
 from src.domain.nbb.aggregator import aggregate_year
+from src.domain.nbb.fetcher import fetch_all_xbrl
 from src.persistence.financials_writer import FinancialsWriter
 
 log = logging.getLogger(__name__)
@@ -90,51 +93,80 @@ def run_for_party(
 
 
 def _fetch_and_parse(kbo: str, *, year_limit: int) -> list[dict[str, Any]]:
-    """Fetch NBB filings and normalize to a list of per-year dicts.
+    """Fetch NBB filings and normalize to per-year dicts for the aggregator.
 
-    Each dict has keys: period_label, period_end (date), codes (dict),
-    model_type, filing_date, fiscal_year_start, fiscal_year_end.
+    Each output dict has keys:
+      - period_label        (str, e.g. "2024")
+      - period_end          (date | None)
+      - fiscal_year_start   (date | None)
+      - fiscal_year_end     (date | None)
+      - codes               (dict[str, float] — PCMN code → EUR amount)
+      - model_type          (str | None — "m01"/"m02"/"m03")
+      - filing_date         (date | None — not yet populated, reserved)
 
-    This wraps the v4g_accounts fetcher + parser. Those modules are the
-    canonical source of parsing logic; we thin-wrap them here to produce
-    the aggregator's expected shape.
+    Uses only the new-format JSON-XBRL path via fetch_all_xbrl. Old-format
+    XBRL (pre-2021 PDF filings parsed from manual ZIP upload) is not wired;
+    that's a separate flow with its own UI.
 
-    STUB: returns empty list. Phase 2.5 will wire this to
-    src.domain.nbb.fetcher.fetch_filings(kbo) and parser.parse_xbrl(xml).
-    Held back one iteration so we can ship the aggregator+writer+worker
-    skeleton and iterate the fetcher glue separately.
+    Raises RuntimeError if NBB_API_KEY is not set. Raises NBBApiError on
+    network / auth failures (propagated from fetcher).
     """
-    # TODO Phase 2.5: wire fetcher + parser
-    # from src.domain.nbb.fetcher import fetch_filings
-    # from src.domain.nbb.parser import parse_xbrl
-    # filings = fetch_filings(kbo, year_limit=year_limit)
-    # years = []
-    # for f in filings:
-    #     parsed = parse_xbrl(f["xml_content"])
-    #     years.append({
-    #         "period_label": f["period_label"],
-    #         "period_end": _date(f["period_end"]),
-    #         "codes": parsed["codes"],
-    #         "model_type": parsed.get("model_type"),
-    #         "filing_date": _date(f.get("filing_date")),
-    #         ...
-    #     })
-    # return years
-    log.warning(
-        "_fetch_and_parse is a stub — returning empty. Phase 2.5 wires this "
-        "to fetcher + parser. Aggregation + writer + worker skeleton are "
-        "verified end-to-end via tests (test_aggregator.py)."
+    api_key = os.environ.get("NBB_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "NBB_API_KEY env var is required for NBB enrichment. "
+            "Set it via Render dashboard or .env file."
+        )
+
+    xbrl_results = fetch_all_xbrl(kbo, api_key, use_cache=True)
+
+    # xbrl_results is list of (year_str, parsed_dict, ref_num) sorted ASC.
+    # Take the most recent `year_limit` entries.
+    recent = xbrl_results[-year_limit:] if year_limit > 0 else xbrl_results
+
+    years: list[dict[str, Any]] = []
+    for year_str, parsed_dict, _ref_num in recent:
+        fy_end   = _parse_iso_date(parsed_dict.get("fy_end"))
+        fy_start = _parse_iso_date(parsed_dict.get("fy_start"))
+
+        # Strip internal count-markers from amounts (the `_count_{code}`
+        # boolean flags used by staging_builder; aggregator doesn't need them)
+        codes = {
+            k: v
+            for k, v in parsed_dict.get("amounts", {}).items()
+            if not k.startswith("_count_")
+        }
+
+        years.append({
+            "period_label":      year_str,
+            "period_end":        fy_end,
+            "fiscal_year_start": fy_start,
+            "fiscal_year_end":   fy_end,
+            "codes":             codes,
+            "model_type":        parsed_dict.get("model_type") or None,
+            "filing_date":       None,  # future: extract from ref_num/ref_meta
+        })
+
+    log.info(
+        "fetch_and_parse kbo=%s years=%d (requested_limit=%d)",
+        kbo, len(years), year_limit,
     )
-    return []
+    return years
 
 
-def _date(s: str | None) -> date | None:
+def _parse_iso_date(s: str | None) -> date | None:
+    """Parse ISO date string (YYYY-MM-DD...) to date. Null-safe."""
     if not s:
         return None
     try:
         return datetime.strptime(s[:10], "%Y-%m-%d").date()
-    except ValueError:
+    except (ValueError, TypeError):
         return None
+
+
+def _date(s: str | None) -> date | None:
+    """Backwards-compat alias — kept for any external callers."""
+    return _parse_iso_date(s)
 
 
 __all__ = ["run_for_party"]
