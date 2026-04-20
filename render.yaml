@@ -1,0 +1,63 @@
+services:
+  # ─── Web service: Flask analyst UI ───────────────────────────────────
+  - type: web
+    name: v4g-ingestion-web
+    runtime: docker
+    plan: starter                # $7/mo — no spin-down
+    dockerfilePath: ./Dockerfile
+    dockerCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 src.web.app:app
+    healthCheckPath: /healthz
+    envVars:
+      - key: SUPABASE_URL
+        sync: false              # set in Render dashboard
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: KBO_PROXY_PATH
+        value: /functions/v1/kbo-proxy
+      - key: NBB_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+
+  # ─── Worker service: enrichment runner ───────────────────────────────
+  - type: worker
+    name: v4g-ingestion-worker
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m src.enrichment.runner
+    envVars:
+      - fromGroup: v4g-ingestion-shared
+      - key: WORKER_MODE
+        value: continuous
+      - key: POLL_INTERVAL_SECONDS
+        value: "30"
+
+  # ─── Cron: nightly stale-party sweep ─────────────────────────────────
+  - type: cron
+    name: v4g-ingestion-sweep
+    runtime: docker
+    plan: starter
+    schedule: "0 2 * * *"        # 02:00 UTC = 03:00 CET daily
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m src.cli.enrich --sweep-stale
+    envVars:
+      - fromGroup: v4g-ingestion-shared
+
+envVarGroups:
+  - name: v4g-ingestion-shared
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: KBO_PROXY_PATH
+        value: /functions/v1/kbo-proxy
+      - key: NBB_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+
+previewsEnabled: true

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8"/>
+<title>V4G Ingestion · {{ version }}</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0F1520;color:#E2E8F0;margin:0;padding:32px;line-height:1.5}
+h1{font-size:18px;margin:0 0 16px;color:#E8A020;letter-spacing:2px}
+.card{background:#141C2E;border:1px solid #1E2D45;border-radius:8px;padding:20px;max-width:720px;margin-bottom:12px}
+.muted{color:#64748B;font-size:12px}
+code{background:#0D1320;padding:2px 6px;border-radius:3px;font-family:'DM Mono',monospace;font-size:12px;color:#6AABF0}
+ul{margin:8px 0;padding-left:22px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+  <h1>V4G INGESTION — v{{ version }}</h1>
+
+  <div class="card">
+    <strong>Phase 1 skeleton</strong>
+    <p class="muted" style="margin:6px 0 0">
+      De enrichment-pipeline staat. Workers landen in volgende fases.
+    </p>
+  </div>
+
+  <div class="card">
+    <strong>Volgende mijlpalen</strong>
+    <ul>
+      <li>Phase 2 — NBB-financials worker (port van <code>v4g_accounts</code>)</li>
+      <li>Phase 3 — KBO-directors worker (via Supabase Edge Function)</li>
+      <li>Phase 4 — Actor-classification worker (SRC_KBO auto-derive)</li>
+      <li>Phase 5 — Event-triggers via GS-MIGRATE-022</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <strong>Health</strong>
+    <p class="muted" style="margin:6px 0 0">
+      <a href="/healthz" style="color:#6AABF0">/healthz</a>
+      — liveness probe
+    </p>
+  </div>
+</body>
+</html>
