@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, render_template
 
 log = logging.getLogger(__name__)
 

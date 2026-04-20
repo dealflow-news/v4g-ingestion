@@ -15,9 +15,7 @@ import logging
 import os
 import sys
 import time
-from typing import Callable
-
-from src.enrichment import queue as q
+from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
