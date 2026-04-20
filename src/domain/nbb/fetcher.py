@@ -3,8 +3,16 @@ NBB CBSO REST API Fetcher  —  application/x.jsonxbrl
 Endpoint: https://ws.cbso.nbb.be/authentic/
 Subscription: CLIENT-000446 / Authentic Data
 """
-import requests, uuid, time, json
+import json
+import time
+import uuid
 from pathlib import Path
+
+import requests
+
+# Pure-count codes: stored as raw number, NOT divided by 1000 later
+# (9087 = FTE average, 9088 = total hours worked)
+PURE_COUNT_CODES = {"9087", "9088"}
 
 API_BASE  = "https://ws.cbso.nbb.be/authentic"
 CACHE_DIR = Path(__file__).parent / "cache"
@@ -41,7 +49,7 @@ def get_references(vat: str, api_key: str) -> list:
     try:
         r = requests.get(url, headers=_headers(), timeout=20)
     except requests.RequestException as e:
-        raise NBBApiError(f"Netwerkfout: {e}")
+        raise NBBApiError(f"Netwerkfout: {e}") from e
 
     if r.status_code == 401:
         raise NBBApiError("Sleutel ongeldig (401) — controleer Instellingen.")
@@ -69,7 +77,7 @@ def fetch_jsonxbrl(reference: str, api_key: str) -> dict | None:
     try:
         r = requests.get(url, headers=_headers("application/x.jsonxbrl"), timeout=30)
     except requests.RequestException as e:
-        raise NBBApiError(f"Netwerkfout bij {reference}: {e}")
+        raise NBBApiError(f"Netwerkfout bij {reference}: {e}") from e
 
     if r.status_code == 200:
         return r.json()
@@ -89,9 +97,7 @@ def parse_rubrics(data: dict, filing_meta: dict) -> dict:
     rubrics = data.get("Rubrics") or data.get("rubrics") or []
 
     # Filter Period=N (current year, no comparative)
-    # Pure-count codes: stored as raw number, NOT divided by 1000 later
-    PURE_COUNT_CODES = {"9087", "9088"}  # FTE average and total hours: raw counts, no /1000
-
+    # Pure-count codes are filtered via module-level PURE_COUNT_CODES
     amounts = {}
     for r in rubrics:
         code   = r.get("Code") if r.get("Code") is not None else r.get("code")
@@ -172,7 +178,7 @@ def fetch_all_xbrl(vat: str, api_key: str,
     if not eligible:
         eligible = refs  # fallback: try all if nothing passes filter
 
-    ref_nums = sorted(set(r["referenceNumber"] for r in eligible), reverse=True)[:10]
+    ref_nums = sorted({r["referenceNumber"] for r in eligible}, reverse=True)[:10]
     total    = len(ref_nums)
     results  = []
 

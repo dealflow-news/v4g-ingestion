@@ -284,10 +284,10 @@ def _extract_metadata(root, ctx_map: dict, content: str) -> dict:
         ctx_ref = el.get("contextRef", "")
         ctx = ctx_map.get(ctx_ref, {})
         dims = ctx.get("dims", {})
-        if dims.get("bas") == "bas:m26":  # bas:m26 = company name in CBSO taxonomy
-            if el.text and el.text != meta["vat"]:
-                meta["company"] = el.text
-                break
+        # bas:m26 = company name in CBSO taxonomy
+        if dims.get("bas") == "bas:m26" and el.text and el.text != meta["vat"]:
+            meta["company"] = el.text
+            break
 
     # Old format: ParticipantEntityName
     if not meta["company"]:
