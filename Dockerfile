@@ -9,15 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install deps first (better layer caching)
+# Copy ALL sources first (so pip install -e . can read setuptools metadata).
+# Layer caching is traded off against simplicity: every src change re-runs
+# pip install, which is ~30-60s. For production builds this is acceptable;
+# for local dev use docker-compose with volume mount instead.
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -e ".[dev]"
-
-# Copy source
 COPY src/ ./src/
 COPY sql/ ./sql/
 COPY README.md ./
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -e ".[dev]"
 
 # Non-root user
 RUN useradd -m -u 1000 v4g && chown -R v4g:v4g /app
