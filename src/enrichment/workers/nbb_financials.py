@@ -1,17 +1,16 @@
 """NBB financials enrichment worker.
 
-Fetches filings from NBB CBSO, parses them (old or new XBRL format),
-aggregates to fact_financials shape, and upserts to Supabase.
+Phase 2.7c contract (Optie A): worker raises on any unrecoverable error.
+Runner catches and maps to outcome='failed'. No more {"outcome": "failed"}
+return values.
 
-Entry point: run_for_party(party_id, kbo)
-  - Fetches 10 years of filings for the given KBO
-  - For each year, produces an AggregatedYear
-  - Converts to FinancialFact models (validated)
-  - Writes via FinancialsWriter
+The writer still has its own object_log row (single source of audit truth
+at the data-write level). Worker raises → no object_log row written →
+runner records the failure on the queue (last_error) and run_log
+(tasks_failed). Operationally: failed runs leave a run_log entry with
+tasks_failed=1 and the queue row's last_error has the exception text.
 
-Fetcher imports come from src.domain.nbb; they are the verbatim port
-of v4g_accounts modules. Old-format XBRL (pre-2021 manual ZIP uploads)
-is not yet wired — that path needs a separate upload UI.
+Entry point: run_for_party(*, party_id, kbo, run_id, year_limit=10)
 """
 from __future__ import annotations
 
@@ -38,24 +37,20 @@ def run_for_party(
 ) -> dict[str, Any]:
     """Enrich one party's NBB financials.
 
-    Returns {outcome, rows_written, error, years_processed, kbo}
-    """
-    try:
-        years_data = _fetch_and_parse(kbo, year_limit=year_limit)
-    except Exception as e:
-        log.exception("fetch_or_parse failed party=%s kbo=%s", party_id, kbo)
-        # Write audit row with failure
-        writer = FinancialsWriter(run_id=run_id)
-        writer.write_facts(party_id=party_id, facts=[])
-        return {
-            "outcome": "failed",
-            "rows_written": 0,
-            "error": f"fetch_parse: {type(e).__name__}: {e}",
-            "years_processed": 0,
-            "kbo": kbo,
-        }
+    Raises:
+        RuntimeError: NBB_API_KEY missing
+        NBBApiError: network / auth / data failure during fetch
+        Exception:   any other unrecoverable error in fetch/parse/write
 
-    # Aggregate each year → AggregatedYear → FinancialFact
+    Returns (only on success):
+        {"rows_written": int, "years_processed": int, "kbo": str}
+    """
+    # Step 1: fetch + parse — let exceptions propagate.
+    years_data = _fetch_and_parse(kbo, year_limit=year_limit)
+
+    # Step 2: aggregate per year. Per-year aggregation errors are isolated
+    # (one bad year shouldn't lose the whole run), but they are LOGGED so
+    # ops can spot taxonomy gaps.
     facts: list[FinancialFact] = []
     for year_info in years_data:
         try:
@@ -69,7 +64,6 @@ def run_for_party(
                 nbb_filing_date=year_info.get("filing_date"),
             )
             row = agg.as_upsert_row(party_id=str(party_id))
-            # FinancialFact validates the upsert row shape (types, enums).
             fact = FinancialFact(**row)
             facts.append(fact)
         except Exception:
@@ -79,14 +73,12 @@ def run_for_party(
             )
             continue
 
-    # Upsert
+    # Step 3: upsert. Writer raises on failure; we let it propagate.
     writer = FinancialsWriter(run_id=run_id)
-    result = writer.write_facts(party_id=party_id, facts=facts)
+    rows_written = writer.write_facts(party_id=party_id, facts=facts)
 
     return {
-        "outcome": result["outcome"],
-        "rows_written": result["rows_written"],
-        "error": result.get("error"),
+        "rows_written": rows_written,
         "years_processed": len(facts),
         "kbo": kbo,
     }
@@ -96,20 +88,12 @@ def _fetch_and_parse(kbo: str, *, year_limit: int) -> list[dict[str, Any]]:
     """Fetch NBB filings and normalize to per-year dicts for the aggregator.
 
     Each output dict has keys:
-      - period_label        (str, e.g. "2024")
-      - period_end          (date | None)
-      - fiscal_year_start   (date | None)
-      - fiscal_year_end     (date | None)
-      - codes               (dict[str, float] — PCMN code → EUR amount)
-      - model_type          (str | None — "m01"/"m02"/"m03")
-      - filing_date         (date | None — not yet populated, reserved)
+      - period_label, period_end, fiscal_year_start, fiscal_year_end
+      - codes (dict[str, float] — PCMN code → EUR amount)
+      - model_type, filing_date
 
-    Uses only the new-format JSON-XBRL path via fetch_all_xbrl. Old-format
-    XBRL (pre-2021 PDF filings parsed from manual ZIP upload) is not wired;
-    that's a separate flow with its own UI.
-
-    Raises RuntimeError if NBB_API_KEY is not set. Raises NBBApiError on
-    network / auth failures (propagated from fetcher).
+    Raises RuntimeError if NBB_API_KEY is not set.
+    Raises NBBApiError on network / auth failures (propagated from fetcher).
     """
     api_key = os.environ.get("NBB_API_KEY")
     if not api_key:
@@ -119,9 +103,6 @@ def _fetch_and_parse(kbo: str, *, year_limit: int) -> list[dict[str, Any]]:
         )
 
     xbrl_results = fetch_all_xbrl(kbo, api_key, use_cache=True)
-
-    # xbrl_results is list of (year_str, parsed_dict, ref_num) sorted ASC.
-    # Take the most recent `year_limit` entries.
     recent = xbrl_results[-year_limit:] if year_limit > 0 else xbrl_results
 
     years: list[dict[str, Any]] = []
@@ -129,8 +110,7 @@ def _fetch_and_parse(kbo: str, *, year_limit: int) -> list[dict[str, Any]]:
         fy_end   = _parse_iso_date(parsed_dict.get("fy_end"))
         fy_start = _parse_iso_date(parsed_dict.get("fy_start"))
 
-        # Strip internal count-markers from amounts (the `_count_{code}`
-        # boolean flags used by staging_builder; aggregator doesn't need them)
+        # Strip internal count-markers from amounts
         codes = {
             k: v
             for k, v in parsed_dict.get("amounts", {}).items()
@@ -162,11 +142,6 @@ def _parse_iso_date(s: str | None) -> date | None:
         return datetime.strptime(s[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return None
-
-
-def _date(s: str | None) -> date | None:
-    """Backwards-compat alias — kept for any external callers."""
-    return _parse_iso_date(s)
 
 
 __all__ = ["run_for_party"]

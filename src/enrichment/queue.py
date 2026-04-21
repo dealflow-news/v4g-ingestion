@@ -1,19 +1,24 @@
 """Queue helpers for gs_enrichment.
 
-Thin wrappers around the SECURITY DEFINER functions defined in
-GS-MIGRATE-021 and GS-MIGRATE-022a. The DB is the source of truth;
-Python just routes calls.
+Thin wrappers around SECURITY DEFINER functions in GS-MIGRATE-021/022a/022c.
+The DB is the source of truth; Python just routes calls.
 
-Phase 2.7 adds: claim_next_task, complete_task (via RPCs), and
-run_log open/close helpers (direct service_role writes).
+All writes to gs_enrichment go through SECURITY DEFINER RPCs:
+- enqueue, sweep_stale_parties (021)
+- claim_next_task, complete_task (022a)
+- open_run_log, close_run_log (022c)
+
+Lazy-open pattern (Phase 2.7c): run_id is generated client-side by the
+runner and passed to both claim_next_task and open_run_log. Runner opens
+run_log only AFTER a successful claim — empty polls produce no run_log rows.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from src.persistence.supabase import admin_client
+
 
 # ─── Enqueue (GS-MIGRATE-021) ─────────────────────────────────────────────
 
@@ -64,11 +69,16 @@ def claim_next_task(
     worker_type: str,
     run_id: UUID,
 ) -> dict[str, Any] | None:
-    """Claim the oldest pending task for a worker_type.
+    """Claim the oldest pending task and link it to a pre-generated run_id.
 
-    Returns the claimed queue row as a dict, or None if the queue is empty
-    for this worker_type. Marks the row as status='running' server-side.
-    Uses FOR UPDATE SKIP LOCKED for safe parallel polling.
+    The run_id MUST be generated client-side (uuid4) before this call.
+    Lazy-open contract: if this returns None, do NOT call open_run_log —
+    no work was claimed, so no run_log row should exist.
+
+    Returns the claimed queue row as dict, or None if queue is empty for
+    this worker_type. Server-side: FOR UPDATE SKIP LOCKED for safe
+    parallel polling, transitions pending → running, attaches run_id,
+    increments attempts.
     """
     client = admin_client()
     result = (
@@ -107,30 +117,30 @@ def complete_task(
     return result.data
 
 
-# ─── Run-log helpers ──────────────────────────────────────────────────────
-# Direct table writes via service_role. Orchestration metadata only the
-# runner touches. Future: migrate to SECURITY DEFINER RPCs (fn_open_run_log,
-# fn_close_run_log) for doctrine consistency — schema_register follow-up.
+# ─── Run-log RPCs (GS-MIGRATE-022c) ───────────────────────────────────────
 
 def open_run_log(
+    run_id: UUID,
     worker_type: str,
-    host: str,
-    app_version: str,
-) -> UUID:
-    """Insert a run_log row with status='running'. Returns run_id."""
+    host: str | None = None,
+    app_version: str | None = None,
+) -> None:
+    """Open a run_log row via fn_open_run_log RPC.
+
+    run_id is the SAME UUID passed to claim_next_task — generated
+    client-side by the runner so queue row and run_log are atomically
+    linked. Call only AFTER claim returned a task (lazy-open).
+    """
     client = admin_client()
-    result = (
-        client.schema("gs_enrichment")
-        .table("run_log")
-        .insert({
-            "worker_type": worker_type,
-            "status": "running",
-            "host": host,
-            "app_version": app_version,
-        })
-        .execute()
-    )
-    return UUID(result.data[0]["run_id"])
+    client.schema("gs_enrichment").rpc(
+        "fn_open_run_log",
+        {
+            "p_run_id":       str(run_id),
+            "p_worker_type":  worker_type,
+            "p_host":         host,
+            "p_app_version":  app_version,
+        },
+    ).execute()
 
 
 def close_run_log(
@@ -142,18 +152,19 @@ def close_run_log(
     tasks_skipped: int,
     error_summary: str | None = None,
 ) -> None:
-    """Close a run_log row. status in {'completed','failed','aborted'}."""
+    """Close a run_log row via fn_close_run_log RPC."""
     if status not in {"completed", "failed", "aborted"}:
         raise ValueError(f"invalid run_log status: {status!r}")
-    tasks_total = tasks_ok + tasks_failed + tasks_skipped
 
     client = admin_client()
-    client.schema("gs_enrichment").table("run_log").update({
-        "status": status,
-        "finished_at": datetime.now(UTC).isoformat(),
-        "tasks_total": tasks_total,
-        "tasks_ok": tasks_ok,
-        "tasks_failed": tasks_failed,
-        "tasks_skipped": tasks_skipped,
-        "error_summary": error_summary,
-    }).eq("run_id", str(run_id)).execute()
+    client.schema("gs_enrichment").rpc(
+        "fn_close_run_log",
+        {
+            "p_run_id":         str(run_id),
+            "p_status":         status,
+            "p_tasks_ok":       tasks_ok,
+            "p_tasks_failed":   tasks_failed,
+            "p_tasks_skipped":  tasks_skipped,
+            "p_error_summary":  error_summary,
+        },
+    ).execute()

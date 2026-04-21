@@ -1,9 +1,23 @@
 """Enrichment worker runner — main loop.
 
-Phase 2.7: claim-and-dispatch loop closed. Runner polls the queue, claims
-tasks via fn_claim_enrichment_task, dispatches to WORKER_REGISTRY, and
-closes tasks via fn_complete_task. run_log lifecycle owned here; writers
-own object_log via the run_id threaded through.
+Phase 2.7c: lazy-open + Optie A (workers always raise on failure).
+
+Per-batch flow per worker_type:
+  1. Generate run_id = uuid4()  (client-side)
+  2. Try claim_next_task(worker_type, run_id)
+     - None → continue to next worker_type. NO run_log row.
+     - dict → proceed.
+  3. open_run_log(run_id, ...)
+  4. Resolve KBO → if missing, complete_task(skipped), close_run_log(skipped=1)
+  5. Dispatch worker:
+     - returns normally → complete_task(done), close_run_log(ok=1)
+     - raises          → complete_task(failed, err), close_run_log(failed=1)
+  6. If anything in 3-5 itself crashes → close_run_log(status=failed, error_summary=...)
+
+Workers always raise on failure (Optie A). They no longer return outcome
+dicts that the runner has to inspect — the only signal is exception
+propagation. Workers may still return summary data for run_log.summary
+aggregation (reserved, not yet wired).
 
 Usage:
     python -m src.enrichment.runner             # continuous mode (Render)
@@ -18,7 +32,7 @@ import socket
 import sys
 import time
 from collections.abc import Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from src import __version__
 from src.enrichment import queue as q
@@ -32,14 +46,12 @@ logging.basicConfig(
 )
 
 
-# Worker signature: (*, party_id: UUID, kbo: str, run_id: UUID) -> dict
-# Workers are expected to:
-#   - raise on unrecoverable infrastructure errors (caught here → 'failed')
-#   - write their own object_log row via the writer (run_id threaded in)
-#   - return a summary dict (reserved for richer run_log.summary aggregation)
-# NOTE: workers MAY also encode fail-soft outcomes in the returned dict (e.g.
-# {"outcome": "failed"} without raising). Current runner treats those as 'done'.
-# Tracked in governance as post-Phase-2.7 hardening follow-up.
+# Worker contract (Optie A, post-Phase-2.7c):
+#   def worker(*, party_id: UUID, kbo: str, run_id: UUID) -> dict
+# - MUST raise on any unrecoverable error. Runner maps raise → 'failed'.
+# - MUST NOT return {"outcome": "failed"} — that path no longer exists.
+# - SHOULD write its own object_log row via the writer (run_id threaded in).
+# - MAY return a summary dict for future run_log.summary aggregation.
 WorkerFn = Callable[..., dict]
 
 WORKER_REGISTRY: dict[str, WorkerFn] = {
@@ -62,9 +74,10 @@ def run_forever(poll_interval: int = 30) -> None:
 
 
 def process_batch() -> int:
-    """Process one batch — one task per registered worker_type.
+    """Process one batch — at most one task per registered worker_type.
 
     Returns total number of tasks processed (ok + failed + skipped).
+    Empty polls produce zero database writes beyond the claim RPCs themselves.
     """
     if not WORKER_REGISTRY:
         return 0
@@ -73,45 +86,81 @@ def process_batch() -> int:
     total = 0
 
     for worker_type, worker_fn in WORKER_REGISTRY.items():
-        run_id = q.open_run_log(
-            worker_type=worker_type,
-            host=host,
-            app_version=__version__,
-        )
-        log.info("run_log opened · run_id=%s worker_type=%s", run_id, worker_type)
+        # Step 1: pre-generate run_id (client-side, lazy-open contract)
+        run_id = uuid4()
 
-        ok, failed, skipped = 0, 0, 0
-        error_summary: str | None = None
-
+        # Step 2: try to claim. If empty, do nothing — no run_log row.
         try:
             task = q.claim_next_task(worker_type=worker_type, run_id=run_id)
-            if task is None:
-                log.debug("no pending tasks for %s", worker_type)
-            else:
-                outcome = _dispatch(worker_type, worker_fn, task, run_id)
-                if outcome == "done":
-                    ok = 1
-                elif outcome == "failed":
-                    failed = 1
-                elif outcome == "skipped":
-                    skipped = 1
-                total += 1
-        except Exception as e:
-            error_summary = f"batch-level crash: {e!r}"[:500]
-            log.exception("unexpected crash in process_batch for %s", worker_type)
+        except Exception:
+            log.exception("claim crashed for worker_type=%s — skipping", worker_type)
+            continue
 
-        q.close_run_log(
-            run_id,
-            status="completed" if error_summary is None else "failed",
-            tasks_ok=ok,
-            tasks_failed=failed,
-            tasks_skipped=skipped,
-            error_summary=error_summary,
-        )
-        log.info(
-            "run_log closed · run_id=%s ok=%d failed=%d skipped=%d",
-            run_id, ok, failed, skipped,
-        )
+        if task is None:
+            log.debug("no pending tasks for %s", worker_type)
+            continue
+
+        # Step 3+: we have work. Open run_log NOW.
+        try:
+            q.open_run_log(
+                run_id=run_id,
+                worker_type=worker_type,
+                host=host,
+                app_version=__version__,
+            )
+        except Exception:
+            # Open failed but queue row is already attached to run_id and
+            # marked running. Best effort: try to mark task failed so it
+            # won't stay stuck. run_log itself is unrecoverable here.
+            log.exception("open_run_log crashed · run_id=%s queue_id=%s",
+                          run_id, task["queue_id"])
+            try:
+                q.complete_task(
+                    task["queue_id"],
+                    outcome="failed",
+                    error="open_run_log failed; see worker logs",
+                )
+            except Exception:
+                log.exception("complete_task fallback also crashed")
+            continue
+
+        log.info("run_log opened · run_id=%s worker_type=%s queue_id=%s",
+                 run_id, worker_type, task["queue_id"])
+
+        # Step 4-5: dispatch
+        ok, failed, skipped = 0, 0, 0
+        error_summary: str | None = None
+        try:
+            outcome = _dispatch(worker_type, worker_fn, task, run_id)
+            if outcome == "done":
+                ok = 1
+            elif outcome == "failed":
+                failed = 1
+            elif outcome == "skipped":
+                skipped = 1
+            total += 1
+        except Exception as e:
+            # _dispatch itself crashed (not the worker — _dispatch wraps that).
+            # This means infrastructure broke between claim and worker.
+            error_summary = f"dispatch infra crash: {e!r}"[:500]
+            log.exception("unexpected crash in _dispatch · run_id=%s", run_id)
+
+        # Step 6: always close
+        try:
+            q.close_run_log(
+                run_id,
+                status="completed" if error_summary is None else "failed",
+                tasks_ok=ok,
+                tasks_failed=failed,
+                tasks_skipped=skipped,
+                error_summary=error_summary,
+            )
+            log.info(
+                "run_log closed · run_id=%s ok=%d failed=%d skipped=%d",
+                run_id, ok, failed, skipped,
+            )
+        except Exception:
+            log.exception("close_run_log crashed · run_id=%s", run_id)
 
     return total
 
@@ -122,17 +171,15 @@ def _dispatch(
     task: dict,
     run_id: UUID,
 ) -> str:
-    """Dispatch a single task. Returns 'done' / 'failed' / 'skipped'.
+    """Dispatch a single claimed task. Returns 'done' / 'failed' / 'skipped'.
 
-    Handles KBO resolution, worker invocation, and queue completion. Any
-    exception in the worker becomes a 'failed' outcome with the error
-    stored in queue.last_error.
+    Resolves KBO, invokes worker, completes the queue task. Worker
+    exceptions are caught here and translated to outcome='failed'.
     """
     queue_id = task["queue_id"]
     party_id = UUID(task["party_id"])
 
-    # Resolve KBO from party_identifiers. If missing → skipped, not failed
-    # (no data source available is a data issue, not a worker bug).
+    # Resolve KBO. Missing → skipped (data issue, not worker bug).
     kbo = _resolve_kbo(party_id)
     if kbo is None:
         msg = f"no KBO identifier found for party_id {party_id}"
@@ -148,7 +195,7 @@ def _dispatch(
         worker_fn(party_id=party_id, kbo=kbo, run_id=run_id)
     except Exception as e:
         err = f"{type(e).__name__}: {e}"[:1000]
-        log.exception("worker failed · queue_id=%s", queue_id)
+        log.exception("worker raised · queue_id=%s", queue_id)
         q.complete_task(queue_id, outcome="failed", error=err)
         return "failed"
 
