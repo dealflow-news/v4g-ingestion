@@ -23,6 +23,7 @@ from uuid import UUID
 from src.canonical.financials import FinancialFact
 from src.domain.nbb.aggregator import aggregate_year
 from src.domain.nbb.fetcher import fetch_all_xbrl
+
 from src.persistence.financials_writer import FinancialsWriter
 
 log = logging.getLogger(__name__)

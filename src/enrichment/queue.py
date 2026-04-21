@@ -19,7 +19,6 @@ from uuid import UUID
 
 from src.persistence.supabase import admin_client
 
-
 # ─── Enqueue (GS-MIGRATE-021) ─────────────────────────────────────────────
 
 def enqueue(

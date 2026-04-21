@@ -34,10 +34,11 @@ import time
 from collections.abc import Callable
 from uuid import UUID, uuid4
 
+from src.persistence.supabase import admin_client
+
 from src import __version__
 from src.enrichment import queue as q
 from src.enrichment.workers import nbb_financials
-from src.persistence.supabase import admin_client
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
