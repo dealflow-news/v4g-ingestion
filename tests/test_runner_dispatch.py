@@ -13,7 +13,6 @@ import pytest
 
 from src.enrichment import runner as r
 
-
 FAKE_RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
 FAKE_QUEUE_ID = UUID("22222222-2222-2222-2222-222222222222")
 FAKE_PARTY_ID = UUID("87f123ef-64e0-463a-b79c-ad4c0bef2855")  # Vela Group

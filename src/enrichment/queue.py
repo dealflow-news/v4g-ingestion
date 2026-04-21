@@ -9,12 +9,11 @@ run_log open/close helpers (direct service_role writes).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from src.persistence.supabase import admin_client
-
 
 # ─── Enqueue (GS-MIGRATE-021) ─────────────────────────────────────────────
 
@@ -151,7 +150,7 @@ def close_run_log(
     client = admin_client()
     client.schema("gs_enrichment").table("run_log").update({
         "status": status,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
         "tasks_total": tasks_total,
         "tasks_ok": tasks_ok,
         "tasks_failed": tasks_failed,
