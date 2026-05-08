@@ -35,8 +35,9 @@ def create_app() -> Flask:
 
     # Blueprints — resource-named (parties, financials, ...). Registered as
     # they land. See src/web/routes/__init__.py for the contract.
-    from src.web.routes import parties
+    from src.web.routes import financials, parties
     app.register_blueprint(parties.bp)
+    app.register_blueprint(financials.bp)
 
     log.info("flask app ready · routes: %s", [str(r) for r in app.url_map.iter_rules()])
     return app

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ party.display_name or party.legal_name }} · V4G{% endblock %}
+
+{% block content %}
+<a href="{{ url_for('parties.index') }}" class="back-link">← Parties</a>
+
+<header class="party-header">
+  <h1>{{ party.display_name or party.legal_name or '(unnamed)' }}</h1>
+  {% if party.legal_name and party.display_name and party.legal_name != party.display_name %}
+    <p class="muted legal-subname">Legal: {{ party.legal_name }}</p>
+  {% endif %}
+
+  <dl class="party-meta">
+    {% if party.kbo_nr %}
+      <dt>KBO</dt><dd class="mono">{{ party.kbo_nr }}</dd>
+    {% endif %}
+    <dt>Status</dt><dd>
+      {{ party.status }}
+      {% if party.status != 'Active' %}<span class="status-warn">non-active</span>{% endif %}
+    </dd>
+    {% if party.country_iso2 %}
+      <dt>Land</dt><dd>{{ party.country_iso2 }}{% if party.city %} · {{ party.city }}{% endif %}</dd>
+    {% endif %}
+    {% if party.actor_type %}
+      <dt>Actor type</dt><dd>
+        {{ party.actor_type }}
+        {% if party.actor_type_confirmed %}<span class="badge-confirmed">✓ confirmed</span>{% endif %}
+      </dd>
+    {% endif %}
+    {% if party.founded_year %}
+      <dt>Opgericht</dt><dd>{{ party.founded_year }}</dd>
+    {% endif %}
+    {% if party.website_domain %}
+      <dt>Website</dt>
+      <dd><a href="https://{{ party.website_domain }}" target="_blank" rel="noopener">{{ party.website_domain }} ↗</a></dd>
+    {% endif %}
+    <dt>Party ID</dt><dd class="mono muted-id">{{ party.party_id }}</dd>
+  </dl>
+</header>
+
+{% if rows %}
+  <section class="chart-section">
+    <div class="section-head">
+      <h2>Revenue &amp; EBITDA · {{ rows|length }} jaar</h2>
+      <a href="{{ url_for('financials.export_xlsx', party_id=party.party_id) }}"
+         class="button button-primary">Download Excel</a>
+    </div>
+    {{ chart_svg | safe }}
+  </section>
+
+  <section class="financials-section">
+    <h2>Jaarcijfers</h2>
+    <div class="table-wrap">
+      <table class="financials-table">
+        <thead>
+          <tr>
+            <th>Periode</th>
+            <th class="num">Revenue (M)</th>
+            <th class="num">EBITDA (M)</th>
+            <th class="num">EBITDA %</th>
+            <th class="num">Net debt (M)</th>
+            <th class="num">FTE</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="mono">{{ r.period_label or (r.period_end|string)[:10] }}</td>
+            <td class="num">{{ "%.2f"|format(r.revenue_eur_m|float) if r.revenue_eur_m is not none else '—' }}</td>
+            <td class="num">{{ "%.2f"|format(r.ebitda_eur_m|float) if r.ebitda_eur_m is not none else '—' }}</td>
+            <td class="num">{{ "%.1f"|format(r.ebitda_margin_pct|float) if r.ebitda_margin_pct is not none else '—' }}</td>
+            <td class="num">{{ "%.2f"|format(r.net_debt_eur_m|float) if r.net_debt_eur_m is not none else '—' }}</td>
+            <td class="num">{{ r.employees if r.employees is not none else '—' }}</td>
+            <td><span class="source-tag">{{ r.source_code }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="provenance-section">
+    <h2>Provenance</h2>
+    <div class="table-wrap">
+      <table class="provenance-table">
+        <thead>
+          <tr>
+            <th>Period end</th>
+            <th>Type</th>
+            <th>Source</th>
+            <th>NBB model</th>
+            <th>Filing date</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="mono">{{ r.period_end or '—' }}</td>
+            <td>{{ r.period_type }}</td>
+            <td><span class="source-tag">{{ r.source_code }}</span></td>
+            <td>{{ r.nbb_model_type or '—' }}</td>
+            <td class="mono">{{ r.nbb_filing_date or '—' }}</td>
+            <td>{{ r.confidence or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+{% else %}
+  <div class="empty">
+    <strong>Geen financial data voor deze party.</strong>
+    <p>Mogelijke redenen:</p>
+    <ul>
+      <li>Niet-Belgische entity (geen NBB depots)</li>
+      <li>Te recente oprichting (eerste deposit nog niet gefiled)</li>
+      <li>Historisch dieper dan de Lane B β2/β3 horizon — backlog item</li>
+    </ul>
+  </div>
+{% endif %}
+{% endblock %}

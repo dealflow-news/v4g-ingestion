@@ -166,3 +166,168 @@ h1 {
   .parties-table th:nth-child(3),
   .parties-table td:nth-child(3) { display: none; }
 }
+
+/* ─── Party detail page ──────────────────────────────────────────────── */
+.back-link {
+  display: inline-block;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+  margin-bottom: 0.75rem;
+}
+.back-link:hover { color: var(--amber); }
+
+.party-header {
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.legal-subname { margin: 0.25rem 0 1rem 0; }
+
+.party-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1.25rem;
+  max-width: 600px;
+  margin: 1rem 0 0 0;
+}
+.party-meta dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding-top: 0.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.party-meta dd { margin: 0; font-weight: 500; }
+
+.mono { font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace; }
+.muted-id { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+
+.status-warn {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  background: #FEF3C7;
+  color: #92400E;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.badge-confirmed {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  background: #DCFCE7;
+  color: #166534;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+/* Chart */
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.section-head h2 { margin: 0; }
+
+.chart-section { margin: 2rem 0; }
+.chart-svg {
+  width: 100%;
+  height: auto;
+  max-width: 800px;
+  background: var(--surface);
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.chart-empty { padding: 0; }
+
+/* Buttons */
+.button {
+  display: inline-block;
+  padding: 0.55rem 1.1rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  font-size: 0.875rem;
+  border: 1px solid transparent;
+  font-family: inherit;
+}
+.button-primary {
+  background: var(--amber);
+  color: var(--navy-dark);
+}
+.button-primary:hover { background: var(--amber-hover); }
+
+/* Sections + section headings */
+section h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 2rem 0 0.75rem 0;
+  color: var(--navy-dark);
+}
+
+/* Financials + provenance tables */
+.table-wrap { overflow-x: auto; margin: 0.5rem 0 1.5rem 0; }
+.financials-table,
+.provenance-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 0.875rem;
+}
+.financials-table th,
+.provenance-table th {
+  background: var(--navy-dark);
+  color: var(--amber);
+  padding: 0.6rem 0.875rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.financials-table td,
+.provenance-table td {
+  padding: 0.5rem 0.875rem;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+.financials-table .num,
+.provenance-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+}
+.financials-table thead th.num,
+.provenance-table thead th.num { text-align: right; }
+.financials-table tbody tr:hover,
+.provenance-table tbody tr:hover { background: var(--surface-alt); }
+
+.source-tag {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  background: var(--navy);
+  color: var(--amber);
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+
+/* Empty state on detail page */
+.empty strong { color: var(--navy-dark); display: block; margin-bottom: 0.5rem; }
+.empty ul { margin: 0.5rem auto 0 auto; padding-left: 1.5rem; max-width: 400px; text-align: left; }
+.empty p { margin: 0.25rem 0; }
