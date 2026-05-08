@@ -9,8 +9,8 @@ Reads `public.vw_target_financials` (analytical layer with YoY deltas + ratios).
 Read-only — no DB writes. Safe to run locally with .env service_role key.
 
 Output: 3-sheet .xlsx
-    • Pivot       — metrics × fiscal years (analyst-friendly, mirrors old v4g_accounts shape)
-    • Raw         — one row per fiscal year, all columns (filterable / copy-pasteable)
+    • Pivot       — metrics × fiscal years (analyst-friendly)
+    • Raw         — one row per fiscal year, all columns (filterable)
     • Provenance  — filing_date, source_code, confidence per period (audit trail)
 
 Doctrine: this CLI is the "Export out of Supabase" leg of the three-act
@@ -71,7 +71,7 @@ PROVENANCE_COLS = [
     "nbb_model_type", "nbb_filing_date",
 ]
 
-# V4G amber + dark navy palette (matches dashboard.html theme)
+# V4G amber + dark navy palette
 _HEADER_FILL = PatternFill("solid", fgColor="E8A020")
 _HEADER_FONT = Font(bold=True, color="0F1520")
 _TITLE_FONT  = Font(bold=True, size=14, color="E8A020")
@@ -235,8 +235,8 @@ def export(party_id: str, out: Path | None) -> None:
     """Export financials for one party to a 3-sheet Excel workbook."""
     try:
         UUID(party_id)
-    except ValueError:
-        raise click.BadParameter(f"Invalid UUID: {party_id}")
+    except ValueError as err:
+        raise click.BadParameter(f"Invalid UUID: {party_id}") from err
 
     log.info("fetching financials party_id=%s", party_id)
     rows, party_meta = fetch_financials(party_id)

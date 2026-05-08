@@ -20,6 +20,7 @@ HERE = Path(__file__).resolve()
 REPO_ROOT = HERE.parents[1]              # tests/.. or scripts/..
 sys.path.insert(0, str(REPO_ROOT))
 
+
 # ─── API-key resolution ─────────────────────────────────────────────────
 def _read_api_key() -> str:
     """Env first, then .env in repo root, then config.json next to fetcher."""
@@ -54,9 +55,9 @@ def main() -> None:
 
     from src.domain.nbb.fetcher import get_references
 
-    VAT = "0401452019"  # AB LENS MOTOR
-    print(f"Fetching references for KBO {VAT}…\n")
-    refs = get_references(VAT, api_key)
+    vat = "0401452019"  # AB LENS MOTOR
+    print(f"Fetching references for KBO {vat}…\n")
+    refs = get_references(vat, api_key)
     print(f"Got {len(refs)} references in total.\n")
 
     if not refs:

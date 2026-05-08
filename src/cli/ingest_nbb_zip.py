@@ -5,18 +5,18 @@ Lane B β1 — Stage NBB CBSO bulk-XBRL ZIPs into _stg_nbb_filings.
 Usage:
     python -m src.cli.ingest_nbb_zip <zip_path> [--party-id UUID] [--dry-run]
 
-Idempotent on filing_reference: re-running the same ZIP is a no-op.
-Staging only — no canonical writes. Promotion to fact_financials happens
-later (β3 sync-promote, or the optional queue+worker fallback in β4).
+Idempotent insert into public._stg_nbb_filings (on filing_reference).
+β3 sync-promote (parse → aggregate → fn_promote_nbb_filing) is the next
+deliverable; until then, staged rows wait in _stg_nbb_filings for promotion.
 
-Filing_date sourcing (LB-005): bulk ZIPs don't include filing_date in
-the XBRL bytes themselves. We do a one-shot lookup against NBB's
-/legalEntity/{vat}/references API per unique KBO in the ZIP and pull
-DepositDate from the response. Requires NBB_API_KEY in env (or .env);
-without it we still stage but with filing_date=NULL.
+Filing_date sourcing (LB-005): bulk ZIPs don't include filing_date in the
+XBRL bytes. We do a one-shot lookup against NBB's /legalEntity/{vat}/
+references API per unique KBO and pull DepositDate. Without NBB_API_KEY
+we still stage but with filing_date=NULL.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -26,7 +26,6 @@ import zipfile
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
-from typing import Optional
 
 import click
 from dotenv import load_dotenv
@@ -62,11 +61,11 @@ class StagingRow:
     kbo_nr: str
     filing_reference: str
     filing_year: int
-    filing_date: Optional[date]
+    filing_date: date | None
     fiscal_year_end: date
-    fiscal_year_start: Optional[date]
+    fiscal_year_start: date | None
     taxonomy_format: str
-    nbb_model_type: Optional[str]
+    nbb_model_type: str | None
     raw_xbrl: str
     raw_xbrl_sha256: str
     source_filename: str
@@ -80,7 +79,7 @@ class StagingRow:
         return d
 
 
-# ─── Domain — XBRL extraction (stdlib ET to match parser.py convention) ─
+# ─── XBRL extraction (stdlib ET to match parser.py convention) ──────────
 def detect_format(head: str) -> str:
     if NS_CBSO_NEW in head:
         return "cbso-new"
@@ -100,22 +99,18 @@ def extract_kbo(xbrl_bytes: bytes) -> str:
     raise ValueError("Could not extract KBO from XBRL identifier")
 
 
-def extract_periods(tree) -> tuple[date, Optional[date]]:
+def extract_periods(tree) -> tuple[date, date | None]:
     """Latest endDate/instant = fiscal_year_end; matching startDate by year."""
     end_dates: list[date] = []
     start_dates: list[date] = []
     for elem in tree.iter():
         tag = elem.tag.rsplit("}", 1)[-1] if isinstance(elem.tag, str) else ""
         if tag in ("endDate", "instant"):
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 end_dates.append(date.fromisoformat((elem.text or "").strip()))
-            except (ValueError, TypeError):
-                pass
         elif tag == "startDate":
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 start_dates.append(date.fromisoformat((elem.text or "").strip()))
-            except (ValueError, TypeError):
-                pass
     if not end_dates:
         raise ValueError("No period endDate or instant found in XBRL")
     fy_end = max(end_dates)
@@ -126,7 +121,7 @@ def extract_periods(tree) -> tuple[date, Optional[date]]:
     return fy_end, fy_start
 
 
-def detect_model_type(xbrl_bytes: bytes) -> Optional[str]:
+def detect_model_type(xbrl_bytes: bytes) -> str | None:
     """Best-effort detection from schemaRef URLs (m01/m02/m03)."""
     head = xbrl_bytes[:4000].decode("utf-8", errors="ignore")
     for m in ("m01", "m02", "m03"):
@@ -144,7 +139,7 @@ def parse_filing_reference(filename: str) -> tuple[str, int]:
     return stem, int(m.group(1))
 
 
-# ─── Persistence — uses repo's admin_client (Stage 2 lockdown) ──────────
+# ─── Persistence ────────────────────────────────────────────────────────
 def lookup_party_id_by_kbo(kbo_nr: str) -> str:
     """Resolve party_id via party_identifiers (id_type='KBO').
 
@@ -170,8 +165,7 @@ def fetch_filing_dates(kbo_nr: str) -> dict[str, dict]:
     """LB-005 — pull DepositDate per filing_reference from NBB references API.
 
     Returns {referenceNumber: {filing_date, deposit_type, model_type}}.
-    Empty dict on failure (NBB_API_KEY missing, network error, etc.) — we
-    still proceed with filing_date=NULL in staging.
+    Empty dict on failure — staging proceeds with filing_date=NULL.
     """
     api_key = os.environ.get("NBB_API_KEY")
     if not api_key:
@@ -206,13 +200,11 @@ def fetch_filing_dates(kbo_nr: str) -> dict[str, dict]:
 def insert_staging_row(row: StagingRow) -> str:
     """Insert one row. Returns 'inserted' or 'duplicate'.
 
-    Idempotency: filing_reference has a UNIQUE constraint, so we use
-    upsert with ignore_duplicates so re-runs are no-ops.
+    Idempotency: filing_reference has UNIQUE constraint, so re-runs no-op.
     """
     client = admin_client()
     payload = row.to_payload()
 
-    # Try modern supabase-py upsert first; fall back to insert+catch on older
     try:
         result = (
             client.table("_stg_nbb_filings")
@@ -225,7 +217,7 @@ def insert_staging_row(row: StagingRow) -> str:
         )
         return "inserted" if (result.data or []) else "duplicate"
     except TypeError:
-        # Older supabase-py without ignore_duplicates kwarg — try insert
+        # Older supabase-py without ignore_duplicates kwarg
         pass
 
     try:
@@ -238,15 +230,16 @@ def insert_staging_row(row: StagingRow) -> str:
         raise
 
 
-# ─── Pipeline ──────────────────────────────────────────────────────────
+# ─── β1 Pipeline (staging) ──────────────────────────────────────────────
 def process_zip(
     zip_path: Path,
-    party_id_override: Optional[str],
+    party_id_override: str | None,
     dry_run: bool,
 ) -> dict:
+    """Stage every XBRL in the ZIP. Returns {inserted, duplicates, errors}."""
     inserted = duplicates = errors = 0
     party_id = party_id_override
-    filing_dates: dict[str, dict] = {}  # populated lazily after first KBO seen
+    filing_dates: dict[str, dict] = {}
 
     with zipfile.ZipFile(zip_path) as zf:
         xbrl_files = sorted(n for n in zf.namelist() if n.endswith(".xbrl"))
@@ -264,25 +257,18 @@ def process_zip(
                 fy_end, fy_start = extract_periods(tree)
                 model_type = detect_model_type(raw)
 
-                # Resolve party once on first filing
                 if party_id is None:
                     party_id = lookup_party_id_by_kbo(kbo)
                     click.echo(f"  → resolved party_id={party_id} via KBO {kbo}")
 
-                # Lazy-fetch filing_dates once per KBO (skip in dry-run)
                 if not filing_dates and not dry_run:
                     filing_dates = fetch_filing_dates(kbo)
 
-                # Apply LB-005 metadata if available
                 meta = filing_dates.get(ref, {})
-                filing_date: Optional[date] = None
+                filing_date: date | None = None
                 if meta.get("filing_date"):
-                    try:
+                    with contextlib.suppress(ValueError, TypeError):
                         filing_date = date.fromisoformat(meta["filing_date"][:10])
-                    except (ValueError, TypeError):
-                        pass
-                # NBB references API gives more granular ModelType (e.g. m02-f) —
-                # prefer it over the namespace-derived guess.
                 if meta.get("model_type"):
                     model_type = meta["model_type"]
 
@@ -327,27 +313,28 @@ def process_zip(
     return {"inserted": inserted, "duplicates": duplicates, "errors": errors}
 
 
+# ─── CLI ────────────────────────────────────────────────────────────────
 @click.command()
 @click.argument("zip_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--party-id", default=None, help="Skip KBO→party_identifiers lookup")
 @click.option("--dry-run", is_flag=True, help="Parse without inserting")
-def ingest(zip_path: Path, party_id: Optional[str], dry_run: bool) -> None:
+def ingest(zip_path: Path, party_id: str | None, dry_run: bool) -> None:
     """Stage a NBB CBSO bulk-XBRL ZIP into _stg_nbb_filings.
 
-    Idempotent on filing_reference. Re-running the same ZIP is a no-op.
+    β1: idempotent insert on filing_reference (re-runs are no-ops).
     Promotion to fact_financials happens via β3 sync-promote (next deliverable).
     """
-    summary = process_zip(zip_path, party_id, dry_run)
+    counts = process_zip(zip_path, party_id, dry_run)
+
     click.echo(
-        f"\nSummary: {summary['inserted']} inserted, "
-        f"{summary['duplicates']} duplicates, {summary['errors']} errors"
+        f"\nSummary: {counts['inserted']} inserted, "
+        f"{counts['duplicates']} duplicates, {counts['errors']} errors"
     )
-    if not dry_run and summary["inserted"]:
+    if not dry_run and counts["inserted"]:
         click.echo(
-            f"         → {summary['inserted']} rows in _stg_nbb_filings.\n"
-            f"         Promotion to fact_financials happens via β3 sync-promote\n"
-            f"         (next deliverable). LB-004 trigger is OPTIONAL with the\n"
-            f"         sync-in-CLI architecture (β4 fallback only)."
+            f"         → {counts['inserted']} rows in _stg_nbb_filings.\n"
+            f"         Promotion to fact_financials happens via β3 sync-promote "
+            f"(next deliverable)."
         )
 
 
