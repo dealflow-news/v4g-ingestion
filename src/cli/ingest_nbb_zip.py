@@ -1,23 +1,35 @@
 #!/usr/bin/env python3
 """
-Lane B β1 — Stage NBB CBSO bulk-XBRL ZIPs into _stg_nbb_filings.
+Lane B β1 + β3 — Stage NBB CBSO bulk-XBRL ZIPs and promote to fact_financials.
 
 Usage:
     python -m src.cli.ingest_nbb_zip <zip_path> [--party-id UUID] [--dry-run]
+                                                 [--no-promote]
 
-Idempotent insert into public._stg_nbb_filings (on filing_reference).
-β3 sync-promote (parse → aggregate → fn_promote_nbb_filing) is the next
-deliverable; until then, staged rows wait in _stg_nbb_filings for promotion.
+Two-phase flow:
+  β1 staging  → idempotent insert into _stg_nbb_filings (on filing_reference)
+  β3 promote  → for each pending row touched in this run: parse raw_xbrl,
+                aggregate via the same aggregator Lane A uses, and call
+                fn_promote_nbb_filing to UPSERT into fact_financials with
+                "latest filing_date wins" conflict resolution per
+                (kbo_nr, fiscal_year_end). Older parsed siblings get demoted
+                to status='superseded'.
 
 Filing_date sourcing (LB-005): bulk ZIPs don't include filing_date in the
 XBRL bytes. We do a one-shot lookup against NBB's /legalEntity/{vat}/
-references API per unique KBO and pull DepositDate. Without NBB_API_KEY
-we still stage but with filing_date=NULL.
+references API per unique KBO and pull DepositDate. fn_promote_nbb_filing
+REQUIRES a non-NULL filing_date (raises 23502 otherwise) — this is the
+conflict-resolution key. If the API call fails, those filings stage with
+filing_date=NULL and β3 will surface them as 'failed' rather than promote
+with a wrong winner.
+
+Use --no-promote to run staging-only (β1 behavior).
 """
 from __future__ import annotations
 
 import contextlib
 import hashlib
+import json as _json
 import logging
 import os
 import re
@@ -30,6 +42,8 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
+from src.domain.nbb.aggregator import aggregate_year
+from src.domain.nbb.parser import parse_xbrl
 from src.persistence.supabase import admin_client
 
 # Auto-load .env from repo root so admin_client() and NBB_API_KEY work
@@ -42,6 +56,17 @@ logging.basicConfig(
     level="INFO",
     format="%(asctime)s  %(levelname)-5s  %(message)s",
 )
+
+
+# ─── _stg_nbb_filings status lifecycle ──────────────────────────────────
+# Verified against fn_promote_nbb_filing body (LB-002, 2026-05-08):
+#   pending    → β1 inserted, no promotion attempted yet
+#   parsed     → β3 promoted, fact_financials row exists, this is the WINNER
+#   superseded → β3 lost a conflict to a sibling with later filing_date
+STAGING_STATUS_COL = "parse_status"
+STATUS_PENDING     = "pending"
+STATUS_PARSED      = "parsed"
+STATUS_SUPERSEDED  = "superseded"
 
 
 # ─── Format detection ───────────────────────────────────────────────────
@@ -235,11 +260,20 @@ def process_zip(
     zip_path: Path,
     party_id_override: str | None,
     dry_run: bool,
-) -> dict:
-    """Stage every XBRL in the ZIP. Returns {inserted, duplicates, errors}."""
+) -> tuple[dict, list[str], str | None]:
+    """Stage every XBRL in the ZIP.
+
+    Returns (counts, touched_filing_references, party_id):
+      - counts: {inserted, duplicates, errors}
+      - touched_refs: every filing_reference parsed (inserted OR duplicate),
+        used by β3 to scope promotion to "things from this run".
+      - party_id: resolved KBO→party_id lookup (None if all entries failed
+        before resolution — defensive, shouldn't happen in practice).
+    """
     inserted = duplicates = errors = 0
     party_id = party_id_override
     filing_dates: dict[str, dict] = {}
+    touched_refs: list[str] = []
 
     with zipfile.ZipFile(zip_path) as zf:
         xbrl_files = sorted(n for n in zf.namelist() if n.endswith(".xbrl"))
@@ -299,6 +333,7 @@ def process_zip(
                     continue
 
                 outcome = insert_staging_row(row)
+                touched_refs.append(ref)
                 if outcome == "inserted":
                     inserted += 1
                     click.echo(f"  [✓]   {tag}")
@@ -310,31 +345,213 @@ def process_zip(
                 errors += 1
                 click.echo(f"  [✗]   {fname}  ERROR: {e}", err=True)
 
-    return {"inserted": inserted, "duplicates": duplicates, "errors": errors}
+    counts = {"inserted": inserted, "duplicates": duplicates, "errors": errors}
+    return counts, touched_refs, party_id
+
+
+# ─── β3 Pipeline (sync-promote) ─────────────────────────────────────────
+def _build_canonical_jsonb(staging_row: dict) -> dict:
+    """Parse staging row's raw_xbrl → AggregatedYear → canonical dict.
+
+    Output is the same shape Lane A's writer uses (AggregatedYear.as_upsert_row),
+    which is a superset of what fn_promote_nbb_filing reads. Extra keys are
+    silently ignored by the function.
+
+    The function's INSERT block reads these keys from the JSONB:
+      period_label, period_end, period_type, revenue_eur_m, ebitda_eur_m,
+      ebit_eur_m, net_income_eur_m, total_assets_eur_m, total_equity_eur_m,
+      cash_eur_m, total_debt_eur_m, net_debt_eur_m, working_capital_eur_m,
+      employees, amount_currency, fx_rate_to_eur, fx_date, nbb_model_type,
+      confidence, notes
+    All others (party_id, source_code, fiscal_year_*, nbb_filing_date) come
+    from the staging row directly inside the function.
+    """
+    parsed = parse_xbrl(staging_row["raw_xbrl"])
+
+    # parser.parse_xbrl returns data with tuple keys
+    # (bas_or_pfs_key, pcmn_code, label, section). aggregator.aggregate_year
+    # wants a flat {pcmn_code: amount} dict — extract index [1].
+    year_data = {key[1]: value for key, value in parsed["data"].items()}
+
+    # Dates come out of Postgres as ISO strings via supabase-py
+    fy_end = date.fromisoformat(staging_row["fiscal_year_end"])
+    fy_start_raw = staging_row.get("fiscal_year_start")
+    fy_start = date.fromisoformat(fy_start_raw) if fy_start_raw else None
+    fd_raw = staging_row.get("filing_date")
+    filing_date = date.fromisoformat(fd_raw) if fd_raw else None
+
+    # period_label convention: bare year of fiscal_year_end (matches
+    # existing SRC_NBB rows from Lane A, e.g. "2024" not "FY2024").
+    period_label = str(fy_end.year)
+
+    agg = aggregate_year(
+        year_data,
+        period_label=period_label,
+        period_end=fy_end,
+        fiscal_year_start=fy_start,
+        fiscal_year_end=fy_end,
+        nbb_model_type=staging_row.get("nbb_model_type"),
+        nbb_filing_date=filing_date,
+    )
+
+    return agg.as_upsert_row(staging_row["party_id"])
+
+
+def _unwrap_rpc_response(data) -> dict:
+    """Normalize supabase-py RPC return to a dict.
+
+    Depending on client version, .data may be a dict, a single-element list,
+    or (rarely) a JSON string. Be defensive.
+    """
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if isinstance(data, str):
+        try:
+            data = _json.loads(data)
+        except (ValueError, TypeError):
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+def promote_filings(filing_ids: list[str]) -> dict:
+    """Call fn_promote_nbb_filing per filing_id. Returns counts dict.
+
+    Outcomes (from the function's RETURN jsonb):
+      - 'parsed'     → wrote/updated a fact_financials row (winner)
+      - 'superseded' → existing parsed sibling has later filing_date (loser)
+      - exception   → counted as 'failed' (e.g. NULL filing_date,
+                       already-parsed status, missing party_id)
+    """
+    promoted = superseded = failed = 0
+    client = admin_client()
+
+    for fid in filing_ids:
+        ref = "?"
+        try:
+            staging = (
+                client.table("_stg_nbb_filings")
+                .select("*")
+                .eq("filing_id", fid)
+                .single()
+                .execute()
+            )
+            row = staging.data
+            if not row:
+                raise LookupError(f"staging row not found for {fid}")
+            ref = row["filing_reference"]
+
+            canonical = _build_canonical_jsonb(row)
+
+            # Atomic call: function decides parsed vs superseded based on
+            # filing_date vs siblings for (kbo_nr, fiscal_year_end), and
+            # demotes losers in the same transaction.
+            rpc_result = client.rpc(
+                "fn_promote_nbb_filing",
+                {
+                    "p_filing_id": fid,
+                    "p_canonical": canonical,
+                },
+            ).execute()
+
+            payload = _unwrap_rpc_response(rpc_result.data)
+            outcome = payload.get("outcome")
+
+            if outcome == "parsed":
+                promoted += 1
+                demoted = payload.get("demoted_older_filings", 0)
+                suffix = f" (demoted {demoted} older)" if demoted else ""
+                click.echo(f"  [→]   {ref:<18}  promoted{suffix}")
+            elif outcome == "superseded":
+                superseded += 1
+                reason = payload.get("reason", "")
+                click.echo(f"  [↘]   {ref:<18}  superseded  {reason}")
+            else:
+                failed += 1
+                click.echo(
+                    f"  [?]   {ref:<18}  unexpected RPC payload: {payload!r}",
+                    err=True,
+                )
+
+        except Exception as e:
+            failed += 1
+            click.echo(f"  [✗]   {ref:<18}  ERROR: {e}", err=True)
+
+    return {"promoted": promoted, "superseded": superseded, "failed": failed}
+
+
+def collect_pending_filing_ids(touched_refs: list[str]) -> list[str]:
+    """Find _stg_nbb_filings rows for touched refs that are still pending.
+
+    Re-runs are safe: rows already in 'parsed' or 'superseded' state are
+    excluded, so β3 only acts on new work.
+    """
+    if not touched_refs:
+        return []
+    client = admin_client()
+    resp = (
+        client.table("_stg_nbb_filings")
+        .select(f"filing_id, {STAGING_STATUS_COL}")
+        .in_("filing_reference", touched_refs)
+        .eq(STAGING_STATUS_COL, STATUS_PENDING)
+        .execute()
+    )
+    return [r["filing_id"] for r in (resp.data or [])]
 
 
 # ─── CLI ────────────────────────────────────────────────────────────────
 @click.command()
 @click.argument("zip_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--party-id", default=None, help="Skip KBO→party_identifiers lookup")
-@click.option("--dry-run", is_flag=True, help="Parse without inserting")
-def ingest(zip_path: Path, party_id: str | None, dry_run: bool) -> None:
-    """Stage a NBB CBSO bulk-XBRL ZIP into _stg_nbb_filings.
+@click.option("--dry-run", is_flag=True, help="Parse without staging or promoting")
+@click.option(
+    "--promote/--no-promote",
+    default=True,
+    help="Run β3 sync-promote after staging (default: yes)",
+)
+def ingest(zip_path: Path, party_id: str | None, dry_run: bool, promote: bool) -> None:
+    """Stage a NBB CBSO bulk-XBRL ZIP and promote to fact_financials.
 
-    β1: idempotent insert on filing_reference (re-runs are no-ops).
-    Promotion to fact_financials happens via β3 sync-promote (next deliverable).
+    β1: idempotent insert into _stg_nbb_filings (on filing_reference).
+    β3: parse each pending row, aggregate, call fn_promote_nbb_filing.
+
+    Use --no-promote for staging-only (β1) behavior.
     """
-    counts = process_zip(zip_path, party_id, dry_run)
-
+    # ── β1 staging ──
+    counts, touched_refs, party_id = process_zip(zip_path, party_id, dry_run)
     click.echo(
-        f"\nSummary: {counts['inserted']} inserted, "
+        f"\nStaging: {counts['inserted']} inserted, "
         f"{counts['duplicates']} duplicates, {counts['errors']} errors"
     )
-    if not dry_run and counts["inserted"]:
+
+    if dry_run:
+        return
+
+    if not promote:
+        if counts["inserted"]:
+            click.echo(
+                f"         → {counts['inserted']} rows in _stg_nbb_filings.\n"
+                f"         Promotion skipped (--no-promote). Re-run without\n"
+                f"         the flag to promote pending rows."
+            )
+        return
+
+    # ── β3 promote ──
+    pending_ids = collect_pending_filing_ids(touched_refs)
+    if not pending_ids:
+        click.echo("\nPromotion: nothing pending — all touched filings already resolved.")
+        return
+
+    click.echo(f"\nPromoting {len(pending_ids)} pending filings via fn_promote_nbb_filing…\n")
+    promo = promote_filings(pending_ids)
+    click.echo(
+        f"\nPromotion: {promo['promoted']} promoted, "
+        f"{promo['superseded']} superseded, {promo['failed']} failed"
+    )
+
+    if promo["promoted"] and party_id:
         click.echo(
-            f"         → {counts['inserted']} rows in _stg_nbb_filings.\n"
-            f"         Promotion to fact_financials happens via β3 sync-promote "
-            f"(next deliverable)."
+            f"         → {promo['promoted']} active SRC_NBB rows in fact_financials\n"
+            f"         for party_id={party_id}"
         )
 
 
