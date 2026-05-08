@@ -105,7 +105,7 @@ def test_party_detail_no_financials_shows_empty_state(client):
     ):
         resp = client.get("/party/982d23e1-9f6d-4551-84cf-12dcab4835ce")
     assert resp.status_code == 200
-    assert "Geen financial data".encode("utf-8") in resp.data
+    assert b"Geen financial data" in resp.data
     # Chart not rendered when no rows
     assert b"<polyline" not in resp.data
 
