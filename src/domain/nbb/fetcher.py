@@ -148,6 +148,10 @@ def parse_rubrics(data: dict, filing_meta: dict) -> dict:
         "fy_end":         fy_end_str,
         "period_months":  period_months,
         "amounts":        amounts,   # {code: eur_amount}
+        # LB-005: surface depot-metadata through the parser so downstream
+        # code (workers/nbb_financials.py) can write fact_financials.nbb_filing_date.
+        "filing_date":    filing_meta.get("DepositDate")  or filing_meta.get("depositDate"),
+        "deposit_type":   filing_meta.get("DepositType")  or filing_meta.get("depositType"),
     }
 
 
@@ -217,6 +221,33 @@ def fetch_all_xbrl(vat: str, api_key: str,
 
     results.sort(key=lambda x: x[0])
     return results
+
+
+def get_filing_dates(vat: str, api_key: str) -> dict[str, dict]:
+    """Pull DepositDate per filing reference for one entity.
+
+    Returns: {referenceNumber: {filing_date, deposit_type, model_type}}
+    Lane B uses this as a sidecar lookup since bulk-XBRL ZIPs don't bundle
+    depot metadata. One API call per unique KBO, cheap and cacheable.
+
+    On any failure (auth, network, missing key) raises NBBApiError with
+    the underlying cause — caller decides whether to proceed with NULL.
+
+    LB-005 implementation note: filing_date comes from the API field
+    `DepositDate` (e.g. "2025-07-04") — confirmed via developer.cbso.nbb.be
+    response inspection on 2026-05-08.
+    """
+    refs = get_references(vat, api_key)
+    out: dict[str, dict] = {}
+    for r in refs:
+        ref = r.get("referenceNumber") or r.get("ReferenceNumber")
+        if ref:
+            out[str(ref)] = {
+                "filing_date":  r.get("DepositDate")  or r.get("depositDate"),
+                "deposit_type": r.get("DepositType")  or r.get("depositType"),
+                "model_type":   r.get("ModelType")    or r.get("modelType"),
+            }
+    return out
 
 
 def clear_cache(vat: str = None):
