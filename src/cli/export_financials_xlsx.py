@@ -95,17 +95,35 @@ def _autosize(ws, min_w: int = 10, max_w: int = 28) -> None:
 
 # ─── Data fetch ─────────────────────────────────────────────────────────
 def fetch_financials(party_id: str) -> tuple[list[dict], dict | None]:
-    """Returns (rows from vw_target_financials, party_registry metadata)."""
+    """Returns (rows from vw_target_financials, party metadata enriched w/ KBO).
+
+    KBO comes from `party_identifiers` (id_type='KBO') — canonical lookup
+    pattern matching `runner.py._resolve_kbo`. `party_registry` itself has
+    no `kbo_nr` column.
+    """
     client = admin_client()
 
+    # Base party metadata (no kbo_nr column on this table)
     party_resp = (
         client.table("party_registry")
-        .select("party_id, legal_name, kbo_nr, country_iso2, party_type")
+        .select("party_id, legal_name, country_iso2, party_type")
         .eq("party_id", party_id)
         .limit(1)
         .execute()
     )
     party_meta = party_resp.data[0] if party_resp.data else None
+
+    # Enrich with KBO via party_identifiers
+    if party_meta:
+        kbo_resp = (
+            client.table("party_identifiers")
+            .select("id_value")
+            .eq("party_id", party_id)
+            .eq("id_type", "KBO")
+            .limit(1)
+            .execute()
+        )
+        party_meta["kbo_nr"] = kbo_resp.data[0]["id_value"] if kbo_resp.data else None
 
     fin_resp = (
         client.table("vw_target_financials")
