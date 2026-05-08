@@ -1,0 +1,168 @@
+/* V4G Ingestion · Web-α stylesheet
+ * Palette mirrors the Excel export (src/services/financial_export.py):
+ *   amber          E8A020 — accents, primary actions
+ *   navy-dark      0F1520 — top bar, headings, body text
+ *   navy           1E2D45 — secondary surfaces
+ *   muted          64748B — supporting text
+ */
+:root {
+  --amber:        #E8A020;
+  --amber-hover:  #D49019;
+  --navy-dark:    #0F1520;
+  --navy:         #1E2D45;
+  --muted:        #64748B;
+  --bg:           #FAFAFA;
+  --surface:      #FFFFFF;
+  --surface-alt:  #FFF8EB;
+  --border:       #E2E8F0;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--navy-dark);
+  line-height: 1.5;
+}
+
+/* ─── Topbar ──────────────────────────────────────────────────────────── */
+.topbar {
+  background: var(--navy-dark);
+  padding: 0.875rem 2rem;
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+.topbar a {
+  color: var(--amber);
+  text-decoration: none;
+  font-weight: 500;
+}
+.topbar a:hover { text-decoration: underline; }
+.topbar .brand {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.topbar .topbar-spacer { flex: 1; }
+.topbar .muted-link {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+}
+
+/* ─── Main layout ─────────────────────────────────────────────────────── */
+main {
+  max-width: 1200px;
+  margin: 2rem auto;
+  padding: 0 2rem;
+}
+
+h1 {
+  color: var(--navy-dark);
+  font-size: 1.75rem;
+  margin: 0 0 0.5rem 0;
+  font-weight: 600;
+}
+
+.muted { color: var(--muted); font-size: 0.9rem; }
+.muted strong { color: var(--navy-dark); font-weight: 600; }
+
+/* ─── Search ──────────────────────────────────────────────────────────── */
+.page-header {
+  margin-bottom: 1.5rem;
+}
+.search {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  max-width: 600px;
+}
+.search input[type="search"] {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: inherit;
+}
+.search input[type="search"]:focus {
+  outline: 2px solid var(--amber);
+  outline-offset: -1px;
+  border-color: var(--amber);
+}
+.search button {
+  padding: 0.75rem 1.5rem;
+  background: var(--amber);
+  color: var(--navy-dark);
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.search button:hover { background: var(--amber-hover); }
+.search button:active { transform: translateY(1px); }
+
+/* ─── Tables ──────────────────────────────────────────────────────────── */
+.parties-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 1rem;
+}
+.parties-table th {
+  background: var(--navy-dark);
+  color: var(--amber);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+}
+.parties-table td {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+.parties-table tbody tr:hover { background: var(--surface-alt); }
+.parties-table td a {
+  color: var(--navy);
+  text-decoration: none;
+  font-weight: 500;
+}
+.parties-table td a:hover { color: var(--amber); }
+.legal-name {
+  display: block;
+  font-size: 0.8rem;
+  margin-top: 0.125rem;
+  font-style: italic;
+}
+
+/* ─── Empty / fallback states ─────────────────────────────────────────── */
+.empty {
+  color: var(--muted);
+  padding: 3rem 2rem;
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  margin-top: 1rem;
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .topbar { padding: 0.75rem 1rem; gap: 1rem; flex-wrap: wrap; }
+  .topbar .topbar-spacer { display: none; }
+  main { padding: 0 1rem; margin: 1rem auto; }
+  .parties-table th:nth-child(3),
+  .parties-table td:nth-child(3) { display: none; }
+}

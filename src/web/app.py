@@ -1,7 +1,8 @@
 """V4G ingestion — Flask analyst UI.
 
-Phase 1 skeleton: /healthz and / (minimal dashboard). Real routes arrive
-as the workers come online.
+Phase 1 skeleton: /healthz and / (minimal dashboard).
+Web-α (sprint 1): parties blueprint registered — see src/web/routes/parties.py.
+Real workers come online in subsequent phases.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ def create_app() -> Flask:
     )
     app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "dev-only-change-me")
 
-    # ─── Routes ────────────────────────────────────────────────────────────
+    # ─── Routes ──────────────────────────────────────────────────────────
 
     @app.route("/healthz")
     def healthz() -> tuple[dict, int]:
@@ -32,9 +33,10 @@ def create_app() -> Flask:
     def index() -> str:
         return render_template("dashboard.html", version="0.1.0")
 
-    # Register blueprints as they land (dashboard stats, nbb analyze, admin queue...)
-    # from src.web.routes import dashboard
-    # app.register_blueprint(dashboard.bp)
+    # Blueprints — resource-named (parties, financials, ...). Registered as
+    # they land. See src/web/routes/__init__.py for the contract.
+    from src.web.routes import parties
+    app.register_blueprint(parties.bp)
 
     log.info("flask app ready · routes: %s", [str(r) for r in app.url_map.iter_rules()])
     return app

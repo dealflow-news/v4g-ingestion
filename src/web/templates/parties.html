@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Parties · V4G{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <h1>Parties</h1>
+  <form method="get" action="{{ url_for('parties.index') }}" class="search">
+    <input type="search" name="q" value="{{ query or '' }}"
+           placeholder="Zoek op naam of KBO (bv. 0459499688)..." autofocus>
+    <button type="submit">Zoek</button>
+  </form>
+</header>
+
+{% if query %}
+  <p class="muted">
+    {{ parties|length }} resultaten voor <strong>"{{ query }}"</strong>
+    {%- if parties|length == 0 %} — probeer een andere zoekterm.{% endif %}
+  </p>
+{% else %}
+  <p class="muted">
+    Recent bijgewerkte active parties — top {{ parties|length }}.
+  </p>
+{% endif %}
+
+{% if parties %}
+<table class="parties-table">
+  <thead>
+    <tr>
+      <th>Naam</th>
+      <th>Land</th>
+      <th>Type</th>
+      <th>Actor type</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in parties %}
+    <tr>
+      <td>
+        <a href="/party/{{ p.party_id }}">
+          {{ p.display_name or p.legal_name or '(unnamed)' }}
+        </a>
+        {% if p.display_name and p.legal_name and p.display_name != p.legal_name %}
+          <span class="legal-name muted">{{ p.legal_name }}</span>
+        {% endif %}
+      </td>
+      <td>{{ p.country_iso2 or '—' }}</td>
+      <td>{{ p.party_type or '—' }}</td>
+      <td>{{ p.actor_type or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  {% if not query %}
+  <div class="empty">
+    Geen parties gevonden. (Database leeg of alle parties zijn niet-Active.)
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
