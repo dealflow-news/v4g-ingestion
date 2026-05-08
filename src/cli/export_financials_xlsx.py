@@ -23,10 +23,15 @@ from pathlib import Path
 from uuid import UUID
 
 import click
+from dotenv import load_dotenv
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from src.persistence.supabase import admin_client
+
+# Auto-load .env from repo root so admin_client() finds SUPABASE_URL etc.
+# override=False keeps any pre-set shell env vars authoritative.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(

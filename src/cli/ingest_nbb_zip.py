@@ -29,8 +29,14 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from dotenv import load_dotenv
 
 from src.persistence.supabase import admin_client
+
+# Auto-load .env from repo root so admin_client() and NBB_API_KEY work
+# without requiring shell-side env-var loading per session.
+# override=False keeps any pre-set shell env vars authoritative.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
