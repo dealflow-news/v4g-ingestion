@@ -21,11 +21,11 @@ dependencies = [
     "openpyxl>=3.1.2",
     "pydantic>=2.5.0",
     # Supabase
-    "supabase>=2.3.0",
+    "supabase>=2.3.0,<2.30",     # 2.30 trekt pyiceberg+MSVC requirement aan
     # Utils
     "python-dotenv>=1.0.0",
     "click>=8.1.7",
-]
+ ]
 
 [project.optional-dependencies]
 dev = [

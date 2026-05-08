@@ -76,3 +76,5 @@ desktop.ini
 *.csv
 *.zip
 !tests/fixtures/**
+
+.venv.zip
