@@ -78,3 +78,6 @@ desktop.ini
 !tests/fixtures/**
 
 .venv.zip
+
+# Analyst export deliverables (regenerable from Supabase)
+exports/
