@@ -53,7 +53,8 @@ DIRECT_MAP: dict[str, str] = {
     "9904":  "net_income",         # Winst v.h. boekjaar
     "20/58": "total_assets",       # Totaal activa (preferred)
     "10/15": "total_equity",       # Eigen vermogen
-    "50/53": "cash",               # Liquide middelen
+    "54/58": "cash",               # Liquide middelen (cbso-new canonical, see LB-009)
+    "50/53": "cash",               # Liquide middelen (pfs-old fallback — see scale logic below)
 }
 
 # Secondary mappings for composites — NOT written to fact_financials directly.
@@ -185,7 +186,11 @@ def aggregate_year(
     ebit         = scale("9901")
     net_income   = scale("9904")
     total_equity = scale("10/15")
-    cash         = scale("50/53")
+
+    # Cash: cbso-new uses 54/58 (Liquide middelen), pfs-old historically packed
+    # cash into 50/53 (which in cbso-new is Geldbeleggingen / current investments).
+    # Prefer 54/58; fallback to 50/53 for pre-2021 filings.
+    cash         = scale("54/58") or scale("50/53")
 
     # Total assets — prefer 20/58, fallback 20/28 (older schemas use 20/28 alone)
     total_assets = scale("20/58") or scale("20/28")

@@ -382,15 +382,29 @@ def _extract_year_data(staging_row: dict, api_key: str | None) -> dict:
                 "Lane A uses the same key — check .env."
             )
         ref = staging_row["filing_reference"]
-        json_data = fetch_jsonxbrl(ref, api_key)
+
+        # LB-008: try cached JSON-XBRL first (raw_json_xbrl JSONB column).
+        # On cache miss, fetch from NBB API and lazy-write back. Cache write
+        # failures don't block promotion — they just mean future re-promote
+        # runs will re-fetch.
+        json_data = staging_row.get("raw_json_xbrl")
         if json_data is None:
-            # 404/406/415 — JSON-XBRL not available (rare for FY≥2021 cbso-new).
-            # No safe fallback: bulk-XBRL parser produces wrong values for v25+.
-            raise NBBApiError(
-                f"NBB returned no JSON-XBRL for {ref}. "
-                f"cbso-new filings should have JSON-XBRL available — "
-                f"check filing-reference validity."
-            )
+            json_data = fetch_jsonxbrl(ref, api_key)
+            if json_data is None:
+                # 404/406/415 — JSON-XBRL not available (rare for FY≥2021 cbso-new).
+                # No safe fallback: bulk-XBRL parser produces wrong values for v25+.
+                raise NBBApiError(
+                    f"NBB returned no JSON-XBRL for {ref}. "
+                    f"cbso-new filings should have JSON-XBRL available — "
+                    f"check filing-reference validity."
+                )
+            try:
+                admin_client().table("_stg_nbb_filings").update(
+                    {"raw_json_xbrl": json_data}
+                ).eq("filing_id", staging_row["filing_id"]).execute()
+            except Exception as cache_err:  # noqa: BLE001
+                log.warning("LB-008 cache write failed for %s: %s", ref, cache_err)
+
         # parse_rubrics returns {amounts: {code: float, _count_xxx: True, ...}, ...}
         # We only need the amounts dict — aggregator ignores unknown keys.
         parsed = parse_rubrics(json_data, {"referenceNumber": ref})
@@ -474,8 +488,17 @@ def promote_filings(filing_ids: list[str], api_key: str | None) -> dict:
     api_key: NBB_API_KEY for fetching JSON-XBRL on cbso-new filings.
              Required if any pending filing is taxonomy_format='cbso-new'.
              pfs-old filings don't use the API and tolerate api_key=None.
+
+    Counter semantics (LB-010):
+      - 'promoted'         = RPC returned outcome='parsed' (per call)
+      - 'superseded'       = RPC returned outcome='superseded' (per call)
+      - 'demoted_by_others' = sum of demoted_older_filings across all calls
+                              (a row counted as 'promoted' here may later be
+                              demoted by a sibling within the same run)
+      - net active rows    = promoted - demoted_by_others (caller computes)
     """
     promoted = superseded = failed = 0
+    demoted_by_others = 0
     client = admin_client()
 
     for fid in filing_ids:
@@ -512,6 +535,7 @@ def promote_filings(filing_ids: list[str], api_key: str | None) -> dict:
             if outcome == "parsed":
                 promoted += 1
                 demoted = payload.get("demoted_older_filings", 0)
+                demoted_by_others += demoted
                 suffix = f" (demoted {demoted} older)" if demoted else ""
                 click.echo(f"  [→]   {ref:<18}  promoted{suffix}")
             elif outcome == "superseded":
@@ -529,7 +553,12 @@ def promote_filings(filing_ids: list[str], api_key: str | None) -> dict:
             failed += 1
             click.echo(f"  [✗]   {ref:<18}  ERROR: {e}", err=True)
 
-    return {"promoted": promoted, "superseded": superseded, "failed": failed}
+    return {
+        "promoted": promoted,
+        "superseded": superseded,
+        "failed": failed,
+        "demoted_by_others": demoted_by_others,
+    }
 
 
 def collect_pending_filing_ids(touched_refs: list[str]) -> list[str]:
@@ -608,16 +637,23 @@ def ingest(zip_path: Path, party_id: str | None, dry_run: bool, promote: bool) -
 
     click.echo(f"\nPromoting {len(pending_ids)} pending filings via fn_promote_nbb_filing…\n")
     promo = promote_filings(pending_ids, api_key)
+    net_active = promo["promoted"] - promo["demoted_by_others"]
     click.echo(
         f"\nPromotion: {promo['promoted']} promoted, "
         f"{promo['superseded']} superseded, {promo['failed']} failed"
     )
-
-    if promo["promoted"] and party_id:
+    if promo["demoted_by_others"]:
         click.echo(
-            f"         → {promo['promoted']} active SRC_NBB rows in fact_financials\n"
-            f"         for party_id={party_id}"
+            f"           {promo['demoted_by_others']} of those "
+            f"were demoted later by a sibling in the same run"
         )
+    click.echo(
+        f"         → {net_active} net active SRC_NBB row"
+        f"{'s' if net_active != 1 else ''} in fact_financials"
+    )
+
+    if net_active and party_id:
+        click.echo(f"         for party_id={party_id}")
 
 
 if __name__ == "__main__":
