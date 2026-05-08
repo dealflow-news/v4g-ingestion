@@ -124,7 +124,8 @@ def _fetch_and_parse(kbo: str, *, year_limit: int) -> list[dict[str, Any]]:
             "fiscal_year_end":   fy_end,
             "codes":             codes,
             "model_type":        parsed_dict.get("model_type") or None,
-            "filing_date":       None,  # future: extract from ref_num/ref_meta
+            # LB-005: filing_date is now extracted in fetcher.parse_rubrics
+            "filing_date":       _parse_iso_date(parsed_dict.get("filing_date")),
         })
 
     log.info(
