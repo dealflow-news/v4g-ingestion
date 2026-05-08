@@ -43,6 +43,7 @@ import click
 from dotenv import load_dotenv
 
 from src.domain.nbb.aggregator import aggregate_year
+from src.domain.nbb.fetcher import NBBApiError, fetch_jsonxbrl, parse_rubrics
 from src.domain.nbb.parser import parse_xbrl
 from src.persistence.supabase import admin_client
 
@@ -350,8 +351,61 @@ def process_zip(
 
 
 # ─── β3 Pipeline (sync-promote) ─────────────────────────────────────────
-def _build_canonical_jsonb(staging_row: dict) -> dict:
-    """Parse staging row's raw_xbrl → AggregatedYear → canonical dict.
+def _extract_year_data(staging_row: dict, api_key: str | None) -> dict:
+    """Extract flat {pcmn_code: amount} from a staging row.
+
+    Branches on taxonomy_format because the bulk-XBRL parser is
+    incompatible with cbso-new's dimensional XBRL (LB-007 finding,
+    2026-05-08): one bas:mXX code can have many dimensional contexts
+    (part, bkd, ntr, ...) and parse_xbrl picks the wrong one.
+
+    Strategy:
+      cbso-new → fetch JSON-XBRL via NBB Authentic Data API. NBB
+                 normalizes all dimensional complexity server-side and
+                 returns canonical PCMN codes. Authoritative source,
+                 used by Lane A and historical Power Query connector.
+      pfs-old  → keep current parse_xbrl on raw_xbrl. Pre-2021 filings
+                 don't have JSON-XBRL available; bulk-XBRL parsing
+                 works fine for them (proven by 19/19 promote success
+                 on AB LENS MOTOR's pfs-old years).
+
+    Raises:
+        NBBApiError on API failure for cbso-new
+        RuntimeError on missing api_key when cbso-new filing requested
+    """
+    fmt = staging_row.get("taxonomy_format", "")
+
+    if fmt == "cbso-new":
+        if not api_key:
+            raise RuntimeError(
+                "NBB_API_KEY env var required to promote cbso-new filings. "
+                "Lane A uses the same key — check .env."
+            )
+        ref = staging_row["filing_reference"]
+        json_data = fetch_jsonxbrl(ref, api_key)
+        if json_data is None:
+            # 404/406/415 — JSON-XBRL not available (rare for FY≥2021 cbso-new).
+            # No safe fallback: bulk-XBRL parser produces wrong values for v25+.
+            raise NBBApiError(
+                f"NBB returned no JSON-XBRL for {ref}. "
+                f"cbso-new filings should have JSON-XBRL available — "
+                f"check filing-reference validity."
+            )
+        # parse_rubrics returns {amounts: {code: float, _count_xxx: True, ...}, ...}
+        # We only need the amounts dict — aggregator ignores unknown keys.
+        parsed = parse_rubrics(json_data, {"referenceNumber": ref})
+        return parsed["amounts"]
+
+    # pfs-old (default fallback): bulk-XBRL parsing
+    parsed = parse_xbrl(staging_row["raw_xbrl"])
+    # parser.parse_xbrl returns data with tuple keys
+    # (bas_or_pfs_key, pcmn_code, label, section). aggregator.aggregate_year
+    # wants a flat {pcmn_code: amount} dict — extract index [1].
+    return {key[1]: value for key, value in parsed["data"].items()}
+
+
+def _build_canonical_jsonb(staging_row: dict, api_key: str | None) -> dict:
+    """Parse staging row → AggregatedYear → canonical dict.
 
     Output is the same shape Lane A's writer uses (AggregatedYear.as_upsert_row),
     which is a superset of what fn_promote_nbb_filing reads. Extra keys are
@@ -366,12 +420,7 @@ def _build_canonical_jsonb(staging_row: dict) -> dict:
     All others (party_id, source_code, fiscal_year_*, nbb_filing_date) come
     from the staging row directly inside the function.
     """
-    parsed = parse_xbrl(staging_row["raw_xbrl"])
-
-    # parser.parse_xbrl returns data with tuple keys
-    # (bas_or_pfs_key, pcmn_code, label, section). aggregator.aggregate_year
-    # wants a flat {pcmn_code: amount} dict — extract index [1].
-    year_data = {key[1]: value for key, value in parsed["data"].items()}
+    year_data = _extract_year_data(staging_row, api_key)
 
     # Dates come out of Postgres as ISO strings via supabase-py
     fy_end = date.fromisoformat(staging_row["fiscal_year_end"])
@@ -413,14 +462,18 @@ def _unwrap_rpc_response(data) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def promote_filings(filing_ids: list[str]) -> dict:
+def promote_filings(filing_ids: list[str], api_key: str | None) -> dict:
     """Call fn_promote_nbb_filing per filing_id. Returns counts dict.
 
     Outcomes (from the function's RETURN jsonb):
       - 'parsed'     → wrote/updated a fact_financials row (winner)
       - 'superseded' → existing parsed sibling has later filing_date (loser)
       - exception   → counted as 'failed' (e.g. NULL filing_date,
-                       already-parsed status, missing party_id)
+                       already-parsed status, missing party_id, NBB API error)
+
+    api_key: NBB_API_KEY for fetching JSON-XBRL on cbso-new filings.
+             Required if any pending filing is taxonomy_format='cbso-new'.
+             pfs-old filings don't use the API and tolerate api_key=None.
     """
     promoted = superseded = failed = 0
     client = admin_client()
@@ -440,7 +493,7 @@ def promote_filings(filing_ids: list[str]) -> dict:
                 raise LookupError(f"staging row not found for {fid}")
             ref = row["filing_reference"]
 
-            canonical = _build_canonical_jsonb(row)
+            canonical = _build_canonical_jsonb(row, api_key)
 
             # Atomic call: function decides parsed vs superseded based on
             # filing_date vs siblings for (kbo_nr, fiscal_year_end), and
@@ -541,8 +594,20 @@ def ingest(zip_path: Path, party_id: str | None, dry_run: bool, promote: bool) -
         click.echo("\nPromotion: nothing pending — all touched filings already resolved.")
         return
 
+    # NBB_API_KEY needed for cbso-new filings (JSON-XBRL via Authentic API).
+    # Same env var Lane A's enrichment worker reads. Empty string → None so
+    # _extract_year_data raises a clear RuntimeError if a cbso-new filing
+    # is encountered without a key, instead of a confusing 401 from NBB.
+    api_key = os.environ.get("NBB_API_KEY") or None
+    if not api_key:
+        click.echo(
+            "  [!]   NBB_API_KEY not set — pfs-old filings will promote, "
+            "cbso-new filings will fail with clear error.",
+            err=True,
+        )
+
     click.echo(f"\nPromoting {len(pending_ids)} pending filings via fn_promote_nbb_filing…\n")
-    promo = promote_filings(pending_ids)
+    promo = promote_filings(pending_ids, api_key)
     click.echo(
         f"\nPromotion: {promo['promoted']} promoted, "
         f"{promo['superseded']} superseded, {promo['failed']} failed"
