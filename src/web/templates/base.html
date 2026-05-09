@@ -11,6 +11,12 @@
     <a href="{{ url_for('index') }}" class="brand">V4G Ingestion</a>
     <a href="{{ url_for('parties.index') }}">Parties</a>
     <span class="topbar-spacer"></span>
+    {% if g.user %}
+      <span class="topbar-user" title="{{ g.user.id }}">
+        {{ g.user.email }}{% if g.user.is_dev_placeholder %} <em>(dev)</em>{% endif %}
+      </span>
+      <a href="{{ url_for('auth.logout') }}" class="topbar-link">Logout</a>
+    {% endif %}
     <a href="{{ url_for('healthz') }}" class="muted-link" title="Liveness probe">/healthz</a>
   </nav>
   <main>

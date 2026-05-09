@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Login · V4G{% endblock %}
+
+{% block content %}
+<div class="login-card">
+  <h1>Inloggen</h1>
+
+  {% if not auth_enabled %}
+    <div class="login-notice login-notice-info">
+      <strong>Auth is uitgeschakeld</strong> (AUTH_ENABLED=false).
+      Sluit dit venster — alle routes zijn open in dev-modus.
+    </div>
+  {% endif %}
+
+  {% if sent_to %}
+    <div class="login-notice login-notice-success">
+      ✓ Mail verstuurd naar <strong>{{ sent_to }}</strong>.<br>
+      Klik op de link in je inbox om in te loggen.
+    </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="login-notice login-notice-error">
+      {% if error == 'invalid_email' %}Ongeldig email-adres.
+      {% elif error == 'send_failed' %}Versturen mislukt. Probeer opnieuw of contacteer admin.
+      {% elif error == 'missing_token' %}Login-link onvolledig — vraag een nieuwe aan.
+      {% elif error == 'verify_failed' %}Login-link verlopen of ongeldig — vraag een nieuwe aan.
+      {% else %}Onbekende fout: {{ error }}.{% endif %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('auth.request_magic_link') }}" class="login-form">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="email">Email</label>
+    <input type="email" name="email" id="email" required autofocus
+           placeholder="jij@domein.com"
+           autocomplete="email">
+    <button type="submit" class="button button-primary">Stuur magic link</button>
+  </form>
+
+  <p class="muted login-help">
+    Je krijgt een email met een login-link. Klik 'm aan en je bent binnen.<br>
+    Geen wachtwoord nodig.
+  </p>
+</div>
+{% endblock %}
