@@ -34,7 +34,8 @@ def test_dashboard_renders() -> None:
     client = app.test_client()
     resp = client.get("/")
     assert resp.status_code == 200
-    assert b"V4G INGESTION" in resp.data
+    assert b"V4G Ingestion" in resp.data
+    assert b"Phase status" in resp.data
 
 
 def test_cli_import() -> None:
