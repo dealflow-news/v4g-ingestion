@@ -118,9 +118,9 @@ def find_non_numeric_sections(obj, path: str = "", results: list | None = None) 
             find_non_numeric_sections(item, f"{path}[{i}]", results)
     elif isinstance(obj, str):
         # Skip purely-numeric strings (PCMN codes are numeric/slash patterns)
-        if not obj.replace(".", "").replace(",", "").replace("/", "").replace("-", "").isdigit():
-            if len(obj) >= 4 and len(obj) <= 200:
-                results.append((path, obj))
+        cleaned = obj.replace(".", "").replace(",", "").replace("/", "").replace("-", "")
+        if not cleaned.isdigit() and 4 <= len(obj) <= 200:
+            results.append((path, obj))
     return results
 
 
