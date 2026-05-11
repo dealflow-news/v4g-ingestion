@@ -279,3 +279,47 @@ def detect_schema(content: str) -> dict:
         "format": "new" if is_new else "old",
         "version": ver,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DB MAPPINGS — taxonomy section codes → dim_pcmn_codes CHECK constraint values
+# ─────────────────────────────────────────────────────────────────────────────
+# Used by extractor.py when writing fact_financials_lines / dim_pcmn_codes lookups.
+# CHECK in DB: section IN ('PL', 'BS_A', 'BS_L', 'WORKERS', 'PROFIT_APPR', 'NOTES')
+
+SECTION_TO_DB = {
+    "BS_A":    "BS_A",
+    "BS_L":    "BS_L",
+    "IS":      "PL",
+    "IS_X":    "PROFIT_APPR",
+    "WORKERS": "WORKERS",
+    "SOCIAL":  "NOTES",      # SOCIAL is not in DB CHECK; collapse to NOTES
+    "NOTES":   "NOTES",
+    "META":    "NOTES",      # rare; safe fallback
+}
+
+
+def section_to_db(section: str) -> str:
+    """Map taxonomy section code to DB-allowed section value."""
+    return SECTION_TO_DB.get(section, "NOTES")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BE-GAAP-CI namespace mapping (third XBRL vocabulary, alongside bas: and pfs:)
+# ─────────────────────────────────────────────────────────────────────────────
+# Older/parallel Belgian XBRL taxonomy. Used by some NBB filings (post-2022 fallback,
+# or specific corporate reports). Maps to canonical PCMN codes that may differ from
+# bas:mXX codes for the same economic concept (e.g., bas:m110 EBIT = MAR 9901,
+# but be-gaap-ci:OperatingResult = MAR 649 historically).
+#
+# Sparse mapping — populated as we encounter be-gaap-ci-flavored filings.
+# Parser currently only handles bas: and pfs: namespaces; add be-gaap-ci handling
+# when needed (W8-worker FU item).
+
+BE_GAAP_CI_MAP = {
+    # element name (without prefix) → (pcmn_code, dutch_label, section)
+    "CashEquivalents":      ("54/58", "Liquide middelen",            "BS_A"),
+    "OperatingProfitLoss":  ("649",   "Bedrijfswinst (verlies) (EBIT)", "IS"),
+    "IncomeTaxExpense":     ("9134",  "Belastingen op het resultaat",   "IS"),
+    # TODO: extend with more elements as we encounter them
+}
