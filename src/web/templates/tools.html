@@ -253,15 +253,18 @@
   <div class="workspace" data-workspace="upload">
     <div class="card">
       <p class="info">
-        Lane B — Historical XBRL archive. Synchronous parse + triple-write. For years before 2021 or NBB Authentic Archive bulk imports.
+        Lane B — NBB Consult ZIP export. Synchronous parse + triple-write. Covers the
+        2007-2021 <code>pfs:ci</code> legacy taxonomy (NBB API gap). Files in the 2022+
+        <code>cbso</code> format inside the ZIP are skipped — use Fetch for those.
+        Party is auto-created if the KBO is new.
         {% if not upload_enabled %}<span class="pill pill-flag">backend disabled (TOOLS_UPLOAD_ENABLED=false)</span>{% endif %}
       </p>
       <form id="upload-form" enctype="multipart/form-data">
         <label class="dropzone" id="dropzone">
           <input type="file" name="file" accept=".zip" id="zip-input">
           <div style="font-size: 32px; color: var(--text-tertiary); line-height: 1;">⬆</div>
-          <p style="margin: 8px 0 4px; font-size: 14px;">Drop a .zip with XBRL files or click to browse</p>
-          <p style="font-size: 12px; color: var(--text-tertiary); margin: 0;">Max 10 MB · Both old XBRL XML and new JSON-XBRL accepted</p>
+          <p style="margin: 8px 0 4px; font-size: 14px;">Drop a NBB Consult export .zip or click to browse</p>
+          <p style="font-size: 12px; color: var(--text-tertiary); margin: 0;">XBRL XML only · 2007-2021 ingested · 2022+ skipped</p>
           <p id="zip-filename" style="font-size: 13px; color: var(--color-info-fg); margin: 8px 0 0; font-weight: 500;"></p>
         </label>
         <button type="submit" class="action action-primary" id="upload-submit" {% if not upload_enabled %}disabled{% endif %}>
@@ -521,11 +524,7 @@
       if (!r.ok) {
         uploadResultBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(data.error||"Upload failed")}</span></div>`;
       } else {
-        let html = "";
-        for (const [k, v] of Object.entries(data)) {
-          html += `<div class="preview-row"><span class="lbl">${escapeHtml(k)}</span><span>${escapeHtml(String(v))}</span></div>`;
-        }
-        uploadResultBody.innerHTML = html;
+        uploadResultBody.innerHTML = renderIngestResult(data);
       }
     } catch (e) {
       uploadResultBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(e.message)}</span></div>`;
@@ -533,6 +532,86 @@
       uploadSubmit.disabled = {{ 'true' if not upload_enabled else 'false' }};
     }
   });
+
+  // ─── Upload result renderer ───────────────────────────────────────────
+  // Maps IngestResult (from src/services/zip_ingester.py) to a compact
+  // summary + collapsible per-file list. Defensive against missing fields
+  // so partial results from server errors still render.
+  function renderIngestResult(data) {
+    const kbo         = data.kbo || "—";
+    const entity      = data.entity_name || "(unknown entity)";
+    const partyId     = (data.party_id || "").slice(0, 8);
+    const wasCreated  = !!data.party_was_created;
+    const total       = data.files_total || 0;
+    const ingested    = data.files_ingested || 0;
+    const skipped     = data.files_skipped || 0;
+    const failed      = data.files_failed || 0;
+    const filings     = data.filings_written || 0;
+    const lines       = data.lines_total || 0;
+    const facts       = data.facts_written || 0;
+    const outcomes    = Array.isArray(data.outcomes) ? data.outcomes : [];
+
+    const partyPill = wasCreated
+      ? `<span class="pill pill-success">auto-created</span>`
+      : `<span class="pill" style="background:var(--bg-soft);color:var(--text-secondary);">existing</span>`;
+
+    // Header summary
+    let html = `
+      <div class="preview-row">
+        <span class="lbl">Party</span>
+        <span><strong>${escapeHtml(entity)}</strong> · KBO ${escapeHtml(kbo)} ${partyPill}</span>
+      </div>
+      <div class="preview-row">
+        <span class="lbl">Party ID</span>
+        <code>${escapeHtml(partyId)}…</code>
+      </div>
+      <div class="preview-row">
+        <span class="lbl">Files</span>
+        <span>
+          <span style="color:var(--color-success);">✓ ${ingested}</span> ingested ·
+          <span style="color:var(--text-tertiary);">⏭ ${skipped}</span> skipped ·
+          <span style="color:${failed > 0 ? 'var(--color-danger)' : 'var(--text-tertiary)'};">✗ ${failed}</span> failed
+          <span style="color:var(--text-tertiary);">(${total} total)</span>
+        </span>
+      </div>
+      <div class="preview-row">
+        <span class="lbl">DB writes</span>
+        <span>${filings} filings · ${lines.toLocaleString()} lines · ${facts} evidence</span>
+      </div>
+    `;
+
+    // Per-file outcomes (collapsible)
+    if (outcomes.length > 0) {
+      const rows = outcomes.map(o => {
+        const icon = o.status === "ingested" ? "✓"
+                   : o.status === "skipped"  ? "⏭"
+                   : "✗";
+        const color = o.status === "ingested" ? "var(--color-success)"
+                    : o.status === "skipped"  ? "var(--text-tertiary)"
+                    : "var(--color-danger)";
+        const meta = o.status === "ingested"
+          ? `FY${escapeHtml(o.period_label || "?")} · ${o.pcmn_count} codes`
+          : escapeHtml(o.reason || "");
+        return `
+          <div style="display:flex;gap:8px;font-size:12px;padding:2px 0;border-bottom:0.5px solid var(--border-tertiary);">
+            <span style="color:${color};width:14px;flex-shrink:0;">${icon}</span>
+            <code style="font-size:11px;flex-shrink:0;min-width:170px;">${escapeHtml(o.filename || "")}</code>
+            <span style="color:var(--text-secondary);font-size:11px;">${meta}</span>
+          </div>
+        `;
+      }).join("");
+      html += `
+        <details style="margin-top:8px;">
+          <summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);user-select:none;">
+            Per-file outcomes (${outcomes.length})
+          </summary>
+          <div style="margin-top:6px;">${rows}</div>
+        </details>
+      `;
+    }
+
+    return html;
+  }
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({

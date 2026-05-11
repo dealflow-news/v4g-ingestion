@@ -4,8 +4,12 @@ Three modes:
 
 - ``Fetch``      — enqueue a NBB ingestion task; live worker triple-writes
                    to fact_filings + fact_financials_lines + fact_financials_evidence.
-- ``Upload ZIP`` — synchronous Lane B import of a ZIP of XBRL/JSON-XBRL files.
-                   v1: behind ``TOOLS_UPLOAD_ENABLED`` env flag (off by default).
+                   Covers 2021+ (NBB Authentic Data API range).
+- ``Upload ZIP`` — synchronous Lane B import of a ZIP of XBRL files. Handles
+                   the 2007-2021 pfs:ci legacy taxonomy (NBB API gap). Skips
+                   2022+ cbso files in the ZIP (use Fetch instead).
+                   Configurable kill-switch via ``TOOLS_UPLOAD_ENABLED`` env var
+                   (default on; set to ``false`` to disable in an environment).
 - ``Export``     — read canonical financials from the DB and stream an .xlsx.
 
 Routes:
@@ -14,7 +18,7 @@ Routes:
 - ``POST /tools/fetch``                  — JSON body, enqueue task.
 - ``GET  /tools/status/<queue_id>``      — JSON status of the queue row.
 - ``GET  /tools/export``                 — return .xlsx (query params).
-- ``POST /tools/upload-zip``             — multipart upload (feature-flagged).
+- ``POST /tools/upload-zip``             — multipart upload (synchronous).
 
 Auth: inherits the app-wide ``before_request`` gate from ``src/web/auth.py``
 (``AUTH_ENABLED`` env var). No per-route RBAC in v1 — explicitly mono-user
@@ -23,7 +27,8 @@ without refactoring (each route is small and isolated).
 
 All writes go through server-side helpers; no direct DB writes from the
 browser. Audit trail is preserved via the existing run_log + object_log
-infrastructure (worker writes), and the queue row itself for fetch jobs.
+infrastructure (worker writes for Fetch; ingester writes via FinancialsWriter
+for Upload), and the queue row itself for Fetch jobs.
 """
 from __future__ import annotations
 
@@ -31,6 +36,7 @@ import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
+from zipfile import BadZipFile
 
 from flask import (
     Blueprint,
@@ -79,7 +85,8 @@ def _resolve_party_id_from_vat(vat: str) -> str | None:
 
     No auto-create here — Fetch enqueues a task and the worker handles
     party_id resolution (or fails clearly); Export requires the party to
-    already exist; Upload-zip handles auto-create in the ingester service.
+    already exist; Upload-zip handles auto-create in the ingester service
+    (resolve_or_create_party).
     """
     if not vat:
         return None
@@ -98,7 +105,12 @@ def _resolve_party_id_from_vat(vat: str) -> str | None:
 
 
 def _upload_enabled() -> bool:
-    return os.environ.get("TOOLS_UPLOAD_ENABLED", "false").lower() in ("true", "1", "yes")
+    """Kill-switch for ZIP upload. Default ON; set TOOLS_UPLOAD_ENABLED=false
+    to disable in an environment (e.g., during incident response).
+    """
+    return os.environ.get("TOOLS_UPLOAD_ENABLED", "true").lower() not in (
+        "false", "0", "no", "off",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -290,42 +302,81 @@ def export() -> Any:
 
 @bp.route("/upload-zip", methods=["POST"])
 def upload_zip() -> tuple[Response, int]:
-    """Lane B sync ZIP ingester.
+    """Synchronous ZIP ingester (Lane B).
 
-    v1: gated behind ``TOOLS_UPLOAD_ENABLED`` env var (off by default).
-    UI shows the dropzone always; backend rejects if flag is off so we
-    can ship the UI now and enable the path after canary.
+    Accepts a multipart/form-data POST with field ``file`` containing a ZIP
+    of NBB Consult XBRL exports. Parses the 2007-2021 pfs:ci files via
+    src.domain.nbb.parser_pfs, dispatches each to the existing aggregator
+    + extractor + FinancialsWriter (same triple-write pipeline as the
+    NBB API worker). cbso (2022+) files in the ZIP are skipped with a
+    pointer to the Fetch flow.
+
+    Auto-creates the party stub if no party_identifiers entry exists for
+    the KBO inside the file (handled by the ingester service).
+
+    Response: 200 with IngestResult dict on success, with per-file
+    outcomes the UI renders. Error responses:
+
+    - 400 — malformed ZIP, no .xbrl members, mixed-company ZIP, missing KBO
+            in first parseable file
+    - 503 — TOOLS_UPLOAD_ENABLED=false in this environment
+    - 500 — unexpected server error (check logs)
+
+    Idempotency: re-uploading the same ZIP converges to the same DB state
+    (UNIQUE on fact_filings.source_code+filing_reference; DELETE-INSERT
+    on lines per filing_id; UPSERT on evidence per party+period+source).
     """
     if not _upload_enabled():
         return jsonify({
-            "error": "ZIP upload is disabled in this environment "
-                     "(set TOOLS_UPLOAD_ENABLED=true to enable).",
+            "error": "ZIP upload is disabled in this environment.",
             "feature_flag": "TOOLS_UPLOAD_ENABLED",
         }), 503
 
-    # When enabled, delegate to the ingester service. Stubbed here so the
-    # route signature is fixed at v1 time and only the implementation
-    # toggles in iteration 2.
+    # The ingester service is the canonical implementation. Keep this
+    # import inside the route so any import-time error surfaces as a 501
+    # (clearly diagnosable) rather than crashing the blueprint at startup.
     try:
-        from src.services.zip_ingester import ingest_uploaded_zip  # type: ignore
-    except ImportError:
-        return jsonify({"error": "zip_ingester not yet implemented"}), 501
+        from src.services.zip_ingester import ingest_uploaded_zip
+    except ImportError as e:
+        log.exception("tools.upload_zip · ingester import failed")
+        return jsonify({"error": f"zip_ingester unavailable: {e}"}), 501
 
     if "file" not in request.files:
-        return jsonify({"error": "No file in request"}), 400
+        return jsonify({"error": "No file in request (expected multipart field 'file')"}), 400
 
     upload = request.files["file"]
-    if not (upload.filename or "").lower().endswith(".zip"):
+    filename = upload.filename or "upload.zip"
+    if not filename.lower().endswith(".zip"):
         return jsonify({"error": "Only .zip files accepted"}), 400
 
     try:
-        result = ingest_uploaded_zip(upload.stream, admin_client(),
-                                     uploaded_filename=upload.filename or "upload.zip")
+        result = ingest_uploaded_zip(
+            upload.stream,
+            admin_client(),
+            uploaded_filename=filename,
+        )
+    except BadZipFile:
+        log.info("tools.upload_zip · bad_zip · filename=%s", filename)
+        return jsonify({"error": "File is not a valid ZIP archive"}), 400
+    except ValueError as e:
+        # Mixed-company ZIP, no extractable KBO, etc. — user-facing.
+        log.info("tools.upload_zip · validation · filename=%s reason=%s", filename, e)
+        return jsonify({"error": str(e)}), 400
     except Exception as e:  # noqa: BLE001
-        log.exception("tools.upload_zip · ingest failed")
-        return jsonify({"error": str(e)}), 500
+        log.exception("tools.upload_zip · ingest failed · filename=%s", filename)
+        return jsonify({"error": f"ingest failed: {e}"}), 500
 
-    log.info("tools.upload_zip · ok · result=%s", result)
+    log.info(
+        "tools.upload_zip · ok · filename=%s kbo=%s party_id=%s "
+        "total=%d ingested=%d skipped=%d failed=%d",
+        filename,
+        result.get("kbo"),
+        result.get("party_id"),
+        result.get("files_total", 0),
+        result.get("files_ingested", 0),
+        result.get("files_skipped", 0),
+        result.get("files_failed", 0),
+    )
     return jsonify(result), 200
 
 
