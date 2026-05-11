@@ -10,6 +10,10 @@ realistic fetcher output.
 
 Phase 2.7c addition: test_run_for_party_raises_on_fetch_failure verifies
 the Optie A contract (workers raise instead of returning failure dicts).
+
+W8-worker addition: test_run_for_party_returns_summary_on_success now
+asserts the triple-write summary keys (filings_written, lines_total) in
+addition to the original (rows_written, years_processed, kbo).
 """
 from __future__ import annotations
 
@@ -91,6 +95,8 @@ def test_fetch_and_parse_transforms_to_aggregator_shape(
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: fake_fetch_output,
     )
+    # W8-worker: also stub get_references to avoid real network call
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     years = worker._fetch_and_parse("0771439317", year_limit=10)
 
@@ -104,6 +110,7 @@ def test_fetch_and_parse_populates_period_metadata(monkeypatch, fake_fetch_outpu
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: fake_fetch_output,
     )
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     years = worker._fetch_and_parse("0771439317", year_limit=10)
     y2023 = years[1]
@@ -121,6 +128,7 @@ def test_fetch_and_parse_strips_count_markers(monkeypatch, fake_fetch_output):
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: fake_fetch_output,
     )
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     years = worker._fetch_and_parse("0771439317", year_limit=10)
     y2022 = years[0]
@@ -136,6 +144,7 @@ def test_fetch_and_parse_honors_year_limit(monkeypatch, fake_fetch_output):
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: fake_fetch_output,
     )
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     years = worker._fetch_and_parse("0771439317", year_limit=2)
 
@@ -173,6 +182,7 @@ def test_fetch_and_parse_tolerates_missing_fiscal_dates(monkeypatch):
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: result,
     )
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     years = worker._fetch_and_parse("0459499688", year_limit=10)
 
@@ -182,7 +192,7 @@ def test_fetch_and_parse_tolerates_missing_fiscal_dates(monkeypatch):
     assert years[0]["codes"]             == {"70": 500_000}
 
 
-# ─── Phase 2.7c: Optie A (raise on failure) ─────────────────────────────────
+# ─── Phase 2.7c: Optie A (raise on failure) ──────────────────────────────────
 
 FAKE_PARTY_ID = UUID("87f123ef-64e0-463a-b79c-ad4c0bef2855")
 FAKE_RUN_ID   = UUID("11111111-1111-1111-1111-111111111111")
@@ -200,6 +210,7 @@ def test_run_for_party_raises_on_fetch_failure(monkeypatch):
     def explode(kbo, api_key, use_cache=True):
         raise RuntimeError("NBB API timeout")
     monkeypatch.setattr(worker, "fetch_all_xbrl", explode)
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     with pytest.raises(RuntimeError, match="NBB API timeout"):
         worker.run_for_party(
@@ -216,8 +227,13 @@ def test_run_for_party_raises_on_writer_failure(monkeypatch, fake_fetch_output):
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: fake_fetch_output,
     )
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     fake_writer = MagicMock()
+    # W8-worker: configure per-filing mocks so per-year loop completes
+    fake_writer.write_filing.return_value = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    fake_writer.write_lines.return_value = 50
+    # write_facts is the LAST call in the worker — its failure should propagate
     fake_writer.write_facts.side_effect = ConnectionError("Supabase unreachable")
     monkeypatch.setattr(
         worker, "FinancialsWriter",
@@ -233,15 +249,24 @@ def test_run_for_party_raises_on_writer_failure(monkeypatch, fake_fetch_output):
 
 
 def test_run_for_party_returns_summary_on_success(monkeypatch, fake_fetch_output):
-    """Happy path returns {rows_written, years_processed, kbo}."""
+    """Happy path returns triple-write summary.
+
+    W8-worker: dict now includes filings_written + lines_total alongside the
+    original rows_written + years_processed + kbo.
+    """
     monkeypatch.setenv("NBB_API_KEY", "fake-test-key")
     monkeypatch.setattr(
         worker, "fetch_all_xbrl",
         lambda kbo, api_key, use_cache=True: fake_fetch_output,
     )
+    monkeypatch.setattr(worker, "get_references", lambda kbo, api_key: [])
 
     fake_writer = MagicMock()
     fake_writer.write_facts.return_value = 3
+    # W8-worker: per-filing methods need return values (ints, not MagicMocks)
+    # so that `lines_total += writer.write_lines(...)` produces an int.
+    fake_writer.write_filing.return_value = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    fake_writer.write_lines.return_value = 50  # lines per filing × 3 filings = 150
     monkeypatch.setattr(
         worker, "FinancialsWriter",
         MagicMock(return_value=fake_writer),
@@ -254,8 +279,13 @@ def test_run_for_party_returns_summary_on_success(monkeypatch, fake_fetch_output
     )
 
     assert result == {
-        "rows_written": 3,
+        "rows_written":    3,
         "years_processed": 3,
-        "kbo": "0771439317",
+        "filings_written": 3,
+        "lines_total":     150,
+        "kbo":             "0771439317",
     }
     fake_writer.write_facts.assert_called_once()
+    # W8-worker: also verify per-filing methods called once per year
+    assert fake_writer.write_filing.call_count == 3
+    assert fake_writer.write_lines.call_count == 3
