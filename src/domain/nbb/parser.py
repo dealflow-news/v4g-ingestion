@@ -5,8 +5,8 @@ Strategy: extract everything, label what we can, preserve unknowns as raw codes.
 """
 
 import xml.etree.ElementTree as ET
-
-from src.domain.nbb.taxonomy import BAS_MAP, PFS_MAP, detect_schema
+import re
+from .taxonomy import BAS_MAP, PFS_MAP, detect_schema, BAS_M107_WORKERS_ONLY
 
 # XML namespaces
 NS_XBRL   = "http://www.xbrl.org/2003/instance"
@@ -284,10 +284,10 @@ def _extract_metadata(root, ctx_map: dict, content: str) -> dict:
         ctx_ref = el.get("contextRef", "")
         ctx = ctx_map.get(ctx_ref, {})
         dims = ctx.get("dims", {})
-        # bas:m26 = company name in CBSO taxonomy
-        if dims.get("bas") == "bas:m26" and el.text and el.text != meta["vat"]:
-            meta["company"] = el.text
-            break
+        if dims.get("bas") == "bas:m26":  # bas:m26 = company name in CBSO taxonomy
+            if el.text and el.text != meta["vat"]:
+                meta["company"] = el.text
+                break
 
     # Old format: ParticipantEntityName
     if not meta["company"]:
