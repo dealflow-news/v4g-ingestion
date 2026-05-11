@@ -41,11 +41,12 @@ def create_app() -> Flask:
     # Blueprints — resource-named (parties, financials, ...). Registered as
     # they land. See src/web/routes/__init__.py for the contract.
     from src.web import auth
-    from src.web.routes import financials, parties
+    from src.web.routes import financials, parties, tools
     app.register_blueprint(parties.bp)
     app.register_blueprint(financials.bp)
+    app.register_blueprint(tools.bp)
     app.register_blueprint(auth.bp)
-
+    
     # Auth gate — installed last so all routes (including blueprints) are
     # covered. Feature-flagged via AUTH_ENABLED env var; off in local dev.
     app.before_request(auth.check_auth)

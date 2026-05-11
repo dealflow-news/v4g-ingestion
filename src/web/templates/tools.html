@@ -1,0 +1,545 @@
+{# Financial Tools — three-mode UI (Fetch / Upload ZIP / Export).
+
+   Self-contained: inline CSS and JS so this works whether or not a base
+   template is present. If your project has a base layout, wrap with
+   {% extends "base.html" %} and move the <style>/<script> blocks accordingly.
+
+   Inputs (Jinja context):
+     - upload_enabled : bool   — toggles the ZIP submit button.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Financial Tools · V4G</title>
+<style>
+  :root {
+    --bg-page: #FBFAF6;
+    --bg-card: #FFFFFF;
+    --bg-soft: #F1EFE8;
+    --text-primary: #2C2C2A;
+    --text-secondary: #5F5E5A;
+    --text-tertiary: #888780;
+    --border-tertiary: rgba(0,0,0,0.10);
+    --border-secondary: rgba(0,0,0,0.20);
+    --color-success: #085041;
+    --color-warning-bg: #FAEEDA;
+    --color-warning-fg: #633806;
+    --color-danger: #791F1F;
+    --color-info-bg: #E6F1FB;
+    --color-info-fg: #0C447C;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--text-primary);
+    background: var(--bg-page);
+    line-height: 1.55;
+  }
+  .container { max-width: 680px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 500; margin: 0 0 4px; }
+  .subtitle { font-size: 14px; color: var(--text-secondary); margin: 0 0 1.5rem; }
+  .seg {
+    display: inline-flex;
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+    background: var(--bg-card);
+  }
+  .seg-btn {
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    border-right: 0.5px solid var(--border-tertiary);
+    font-size: 14px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: inherit;
+  }
+  .seg-btn:last-child { border-right: none; }
+  .seg-btn[aria-selected="true"] {
+    background: var(--bg-soft);
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .seg-btn:hover:not([aria-selected="true"]) { background: var(--bg-soft); }
+  .workspace { display: none; }
+  .workspace.active { display: block; }
+  .card {
+    background: var(--bg-card);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+  }
+  .info {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 1rem;
+    line-height: 1.55;
+  }
+  code { font-size: 0.9em; }
+  .field { margin-bottom: 1rem; }
+  .field label {
+    display: block;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+  .field input[type="text"], .field input[type="number"] {
+    padding: 8px 12px;
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    background: var(--bg-card);
+    font-family: inherit;
+    color: var(--text-primary);
+  }
+  .field input[type="text"]:focus, .field input[type="number"]:focus {
+    outline: 2px solid var(--color-info-fg);
+    outline-offset: -1px;
+  }
+  .helper {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+  .action {
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border: 0.5px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+  }
+  .action:hover { background: var(--bg-soft); }
+  .action:disabled { opacity: 0.5; cursor: not-allowed; }
+  .action-primary {
+    background: var(--text-primary);
+    color: white;
+    border-color: var(--text-primary);
+  }
+  .action-primary:hover { background: var(--text-secondary); }
+  .preview-label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin: 1.25rem 0 8px;
+  }
+  .preview {
+    background: var(--bg-soft);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    font-size: 13px;
+  }
+  .preview-row {
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .preview-row:last-child { margin-bottom: 0; }
+  .preview-row .lbl { color: var(--text-secondary); }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+  }
+  .pill-flag { background: var(--color-warning-bg); color: var(--color-warning-fg); }
+  .pill-success { background: #E1F5EE; color: var(--color-success); }
+  .pill-error { background: #FCEBEB; color: var(--color-danger); }
+  .dropzone {
+    border: 1.5px dashed var(--border-secondary);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    text-align: center;
+    margin-bottom: 1rem;
+    background: var(--bg-soft);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .dropzone.dragover { background: var(--color-info-bg); border-color: var(--color-info-fg); }
+  .dropzone input[type="file"] { display: none; }
+  .sub-seg {
+    display: inline-flex;
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-top: 4px;
+    background: var(--bg-card);
+  }
+  .sub-btn {
+    padding: 6px 14px;
+    background: transparent;
+    border: none;
+    border-right: 0.5px solid var(--border-tertiary);
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .sub-btn:last-child { border-right: none; }
+  .sub-btn[aria-selected="true"] {
+    background: var(--bg-soft);
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .hidden { display: none !important; }
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Financial tools</h1>
+  <p class="subtitle">Fetch NBB filings, ingest archived XBRL, or export analyst-ready Excel.</p>
+
+  <div class="seg" role="tablist" aria-label="Tool mode">
+    <button class="seg-btn" data-mode="fetch" role="tab" aria-selected="true">⬇  Fetch</button>
+    <button class="seg-btn" data-mode="upload" role="tab" aria-selected="false">⬆  Upload ZIP</button>
+    <button class="seg-btn" data-mode="export" role="tab" aria-selected="false">⬇  Export</button>
+  </div>
+
+  {# ─── FETCH ─────────────────────────────────────────────────────────── #}
+  <div class="workspace active" data-workspace="fetch">
+    <div class="card">
+      <p class="info">
+        Lane A — NBB Authentic Data API. Queues a worker job; triple-writes to
+        <code>fact_filings</code> + <code>fact_financials_lines</code> + <code>fact_financials_evidence</code>.
+      </p>
+      <form id="fetch-form">
+        <div class="field">
+          <label for="fetch-vat">VAT / KBO number</label>
+          <input id="fetch-vat" name="vat" type="text" placeholder="0459499688 or BE0459499688" required>
+        </div>
+        <div class="field">
+          <label for="fetch-years">Max years</label>
+          <input id="fetch-years" name="max_years" type="number" value="10" min="1" max="20" style="width: 100px;">
+          <p class="helper">NBB Authentic Data API typically returns 2021–current. Use Upload ZIP for older years.</p>
+        </div>
+        <button type="submit" class="action action-primary" id="fetch-submit">▶  Start ingestion</button>
+      </form>
+      <div id="fetch-status" class="hidden">
+        <p class="preview-label">Status:</p>
+        <div class="preview" id="fetch-status-body"></div>
+      </div>
+    </div>
+  </div>
+
+  {# ─── UPLOAD ZIP ──────────────────────────────────────────────────────── #}
+  <div class="workspace" data-workspace="upload">
+    <div class="card">
+      <p class="info">
+        Lane B — Historical XBRL archive. Synchronous parse + triple-write. For years before 2021 or NBB Authentic Archive bulk imports.
+        {% if not upload_enabled %}<span class="pill pill-flag">backend disabled (TOOLS_UPLOAD_ENABLED=false)</span>{% endif %}
+      </p>
+      <form id="upload-form" enctype="multipart/form-data">
+        <label class="dropzone" id="dropzone">
+          <input type="file" name="file" accept=".zip" id="zip-input">
+          <div style="font-size: 32px; color: var(--text-tertiary); line-height: 1;">⬆</div>
+          <p style="margin: 8px 0 4px; font-size: 14px;">Drop a .zip with XBRL files or click to browse</p>
+          <p style="font-size: 12px; color: var(--text-tertiary); margin: 0;">Max 10 MB · Both old XBRL XML and new JSON-XBRL accepted</p>
+          <p id="zip-filename" style="font-size: 13px; color: var(--color-info-fg); margin: 8px 0 0; font-weight: 500;"></p>
+        </label>
+        <button type="submit" class="action action-primary" id="upload-submit" {% if not upload_enabled %}disabled{% endif %}>
+          ▶  Ingest filings
+        </button>
+      </form>
+      <div id="upload-result" class="hidden">
+        <p class="preview-label">Result:</p>
+        <div class="preview" id="upload-result-body"></div>
+      </div>
+    </div>
+  </div>
+
+  {# ─── EXPORT ──────────────────────────────────────────────────────────── #}
+  <div class="workspace" data-workspace="export">
+    <div class="card">
+      <p class="info">
+        Excel export from canonical DB. Reads <code>fact_filings</code> + <code>fact_financials_lines</code> + <code>fact_financials_evidence</code> — no NBB API call.
+      </p>
+      <form id="export-form">
+        <div class="field">
+          <label for="export-vat">VAT / KBO number</label>
+          <input id="export-vat" name="vat" type="text" placeholder="0459499688" required>
+        </div>
+        <div class="field">
+          <label>Format</label>
+          <div class="sub-seg" role="tablist" aria-label="Export format">
+            <button type="button" class="sub-btn" data-format="simple" role="tab" aria-selected="true">Simple</button>
+            <button type="button" class="sub-btn" data-format="analyst" role="tab" aria-selected="false">Analyst</button>
+          </div>
+          <p class="helper" id="format-helper">
+            <strong>Simple</strong> · 10-yr P&L + BS overview + KPIs.
+          </p>
+        </div>
+        <div class="field">
+          <label for="export-years">Year range</label>
+          <input id="export-years" name="years" type="number" value="10" min="1" max="20" style="width: 100px;">
+        </div>
+        <input type="hidden" id="export-format" name="format" value="simple">
+        <button type="submit" class="action action-primary">⬇  Download Excel</button>
+      </form>
+      <div id="export-error" class="hidden" style="margin-top: 1rem;">
+        <p class="preview-label">Error:</p>
+        <div class="preview" id="export-error-body"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ─── Mode switcher ────────────────────────────────────────────────────
+  const segBtns = document.querySelectorAll(".seg-btn");
+  const workspaces = document.querySelectorAll(".workspace");
+
+  segBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      segBtns.forEach(b => b.setAttribute("aria-selected", b === btn ? "true" : "false"));
+      workspaces.forEach(w => w.classList.toggle("active", w.dataset.workspace === mode));
+    });
+  });
+
+  // ─── Format sub-toggle (Export) ───────────────────────────────────────
+  const subBtns = document.querySelectorAll(".sub-btn");
+  const helper = document.getElementById("format-helper");
+  const exportFormat = document.getElementById("export-format");
+  const helpText = {
+    simple:  "<strong>Simple</strong> · 10-yr P&L + BS overview + KPIs.",
+    analyst: "<strong>Analyst</strong> · Simple sheets + Filings metadata + Detail tab per filing (~280 PCMN codes).",
+  };
+  subBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const fmt = btn.dataset.format;
+      subBtns.forEach(b => b.setAttribute("aria-selected", b === btn ? "true" : "false"));
+      helper.innerHTML = helpText[fmt];
+      exportFormat.value = fmt;
+    });
+  });
+
+  // ─── Fetch flow ───────────────────────────────────────────────────────
+  const fetchForm = document.getElementById("fetch-form");
+  const fetchSubmit = document.getElementById("fetch-submit");
+  const fetchStatus = document.getElementById("fetch-status");
+  const fetchStatusBody = document.getElementById("fetch-status-body");
+  let pollHandle = null;
+
+  function renderStatus(row) {
+    if (!row) return "";
+    const status = row.status || "?";
+    const statusColor = {
+      done:    "var(--color-success)",
+      failed:  "var(--color-danger)",
+      running: "var(--color-info-fg)",
+      pending: "var(--text-secondary)",
+    }[status] || "var(--text-secondary)";
+
+    const summary = row.summary || {};
+    const cs = summary.change_summary || {};
+
+    let html = `
+      <div class="preview-row"><span class="lbl">Queue ID</span><code>${(row.queue_id||"").slice(0,8)}…</code></div>
+      <div class="preview-row"><span class="lbl">Status</span><span style="color:${statusColor};font-weight:500;">${status}${status==="running"?'  <span class="spinner"></span>':""}</span></div>
+    `;
+    if (cs.fact_filings !== undefined) {
+      html += `<div class="preview-row"><span class="lbl">Filings written</span><span>${cs.fact_filings}</span></div>`;
+    }
+    if (cs.fact_financials_lines !== undefined) {
+      html += `<div class="preview-row"><span class="lbl">Lines</span><span>${cs.fact_financials_lines.toLocaleString()}</span></div>`;
+    }
+    if (cs.fact_financials_evidence !== undefined) {
+      html += `<div class="preview-row"><span class="lbl">Evidence updates</span><span>${cs.fact_financials_evidence}</span></div>`;
+    }
+    if (summary.duration_ms !== undefined) {
+      html += `<div class="preview-row"><span class="lbl">Duration</span><span>${(summary.duration_ms/1000).toFixed(1)} s</span></div>`;
+    }
+    if (row.last_error) {
+      html += `<div class="preview-row"><span class="lbl">Error</span><span style="color:var(--color-danger);">${escapeHtml(row.last_error).slice(0,120)}</span></div>`;
+    }
+    return html;
+  }
+
+  async function pollStatus(queueId) {
+    try {
+      const r = await fetch(`/tools/status/${queueId}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const row = await r.json();
+      fetchStatusBody.innerHTML = renderStatus(row);
+      if (row.status === "done" || row.status === "failed") {
+        clearInterval(pollHandle);
+        pollHandle = null;
+        fetchSubmit.disabled = false;
+      }
+    } catch (e) {
+      fetchStatusBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">Poll error: ${escapeHtml(e.message)}</span></div>`;
+      clearInterval(pollHandle);
+      pollHandle = null;
+      fetchSubmit.disabled = false;
+    }
+  }
+
+  fetchForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (pollHandle) clearInterval(pollHandle);
+    fetchSubmit.disabled = true;
+    fetchStatus.classList.remove("hidden");
+    fetchStatusBody.innerHTML = `<div class="preview-row"><span class="lbl">Enqueuing…</span><span class="spinner"></span></div>`;
+
+    const payload = {
+      vat: document.getElementById("fetch-vat").value,
+      max_years: parseInt(document.getElementById("fetch-years").value, 10) || 10,
+    };
+    try {
+      const r = await fetch("/tools/fetch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        fetchStatusBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(data.error||"Enqueue failed")}</span></div>`;
+        fetchSubmit.disabled = false;
+        return;
+      }
+      fetchStatusBody.innerHTML = renderStatus({ queue_id: data.queue_id, status: "pending" });
+      pollHandle = setInterval(() => pollStatus(data.queue_id), 2000);
+    } catch (e) {
+      fetchStatusBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(e.message)}</span></div>`;
+      fetchSubmit.disabled = false;
+    }
+  });
+
+  // ─── Export flow — direct download ────────────────────────────────────
+  const exportForm = document.getElementById("export-form");
+  const exportError = document.getElementById("export-error");
+  const exportErrorBody = document.getElementById("export-error-body");
+
+  exportForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    exportError.classList.add("hidden");
+    const vat = document.getElementById("export-vat").value;
+    const fmt = exportFormat.value;
+    const years = document.getElementById("export-years").value;
+    const url = `/tools/export?vat=${encodeURIComponent(vat)}&format=${fmt}&years=${years}`;
+
+    // HEAD-style probe via fetch to surface errors as JSON; if OK, redirect to trigger download
+    try {
+      const r = await fetch(url);
+      if (r.ok) {
+        // It's the xlsx — trigger a real download
+        const blob = await r.blob();
+        const dispo = r.headers.get("content-disposition") || "";
+        const m = /filename="?([^";]+)"?/i.exec(dispo);
+        const filename = m ? m[1] : "export.xlsx";
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(a.href);
+        return;
+      }
+      const data = await r.json();
+      exportErrorBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(data.error||"Export failed")}</span></div>`;
+      exportError.classList.remove("hidden");
+    } catch (e) {
+      exportErrorBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(e.message)}</span></div>`;
+      exportError.classList.remove("hidden");
+    }
+  });
+
+  // ─── Upload ZIP flow ──────────────────────────────────────────────────
+  const dropzone = document.getElementById("dropzone");
+  const zipInput = document.getElementById("zip-input");
+  const zipFilename = document.getElementById("zip-filename");
+  const uploadForm = document.getElementById("upload-form");
+  const uploadSubmit = document.getElementById("upload-submit");
+  const uploadResult = document.getElementById("upload-result");
+  const uploadResultBody = document.getElementById("upload-result-body");
+
+  ["dragover", "dragenter"].forEach(ev => dropzone.addEventListener(ev, e => {
+    e.preventDefault();
+    dropzone.classList.add("dragover");
+  }));
+  ["dragleave", "drop"].forEach(ev => dropzone.addEventListener(ev, e => {
+    e.preventDefault();
+    dropzone.classList.remove("dragover");
+  }));
+  dropzone.addEventListener("drop", e => {
+    if (e.dataTransfer.files.length > 0) {
+      zipInput.files = e.dataTransfer.files;
+      zipFilename.textContent = zipInput.files[0].name;
+    }
+  });
+  zipInput.addEventListener("change", () => {
+    zipFilename.textContent = zipInput.files[0] ? zipInput.files[0].name : "";
+  });
+
+  uploadForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (!zipInput.files[0]) {
+      uploadResultBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">Select a ZIP first</span></div>`;
+      uploadResult.classList.remove("hidden");
+      return;
+    }
+    uploadSubmit.disabled = true;
+    uploadResult.classList.remove("hidden");
+    uploadResultBody.innerHTML = `<div class="preview-row"><span class="lbl">Uploading…</span><span class="spinner"></span></div>`;
+    const fd = new FormData();
+    fd.append("file", zipInput.files[0]);
+    try {
+      const r = await fetch("/tools/upload-zip", { method: "POST", body: fd });
+      const data = await r.json();
+      if (!r.ok) {
+        uploadResultBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(data.error||"Upload failed")}</span></div>`;
+      } else {
+        let html = "";
+        for (const [k, v] of Object.entries(data)) {
+          html += `<div class="preview-row"><span class="lbl">${escapeHtml(k)}</span><span>${escapeHtml(String(v))}</span></div>`;
+        }
+        uploadResultBody.innerHTML = html;
+      }
+    } catch (e) {
+      uploadResultBody.innerHTML = `<div class="preview-row"><span style="color:var(--color-danger);">${escapeHtml(e.message)}</span></div>`;
+    } finally {
+      uploadSubmit.disabled = {{ 'true' if not upload_enabled else 'false' }};
+    }
+  });
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;",
+    }[c]));
+  }
+})();
+</script>
+</body>
+</html>
