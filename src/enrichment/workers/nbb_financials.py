@@ -33,7 +33,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from src.canonical.financials import FinancialFact, FilingRecord, FinancialLine
+from src.canonical.financials import FilingRecord, FinancialFact, FinancialLine
 from src.domain.nbb.aggregator import aggregate_year
 from src.domain.nbb.extractor import extract_filing_and_lines_from_parsed
 from src.domain.nbb.fetcher import fetch_all_xbrl, get_references
@@ -100,7 +100,7 @@ def run_for_party(
                 filing_meta=year_info.get("filing_meta"),
             )
             filing = FilingRecord(**filing_dict)
-            lines = [FinancialLine(**l) for l in lines_dicts]
+            lines = [FinancialLine(**ln) for ln in lines_dicts]
 
             # 2c. W8-worker: write filing → lines (FK ordering matters)
             filing_id = writer.write_filing(filing)

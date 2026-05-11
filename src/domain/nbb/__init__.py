@@ -33,30 +33,30 @@ Public API (re-exports):
     - SECTION_TO_DB, section_to_db()       — taxonomy section → DB CHECK value
     - detect_schema()                       — namespace detection from XBRL XML
 """
-from .fetcher import (
-    NBBApiError,
-    set_key,
-    get_references,
-    fetch_jsonxbrl,
-    parse_rubrics,
-    fetch_all_xbrl,
-    get_filing_dates,
-    clear_cache,
-)
-from .parser import parse_xbrl
 from .extractor import (
+    SOURCE_CODE,
     extract_filing_and_lines_from_parsed,
     extract_from_jsonxbrl,
     extract_from_xbrl_xml,
-    SOURCE_CODE,
 )
+from .fetcher import (
+    NBBApiError,
+    clear_cache,
+    fetch_all_xbrl,
+    fetch_jsonxbrl,
+    get_filing_dates,
+    get_references,
+    parse_rubrics,
+    set_key,
+)
+from .parser import parse_xbrl
 from .taxonomy import (
     BAS_MAP,
-    PFS_MAP,
     BE_GAAP_CI_MAP,
+    PFS_MAP,
     SECTION_TO_DB,
-    section_to_db,
     detect_schema,
+    section_to_db,
 )
 
 __all__ = [

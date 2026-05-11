@@ -8,12 +8,11 @@ To run live integration test (requires NBB_API_KEY env):
     pytest tests/integration/test_nbb_live.py
 """
 from datetime import date
-from uuid import uuid4
 
 import pytest
 
-from src.domain.nbb import extract_from_jsonxbrl, SOURCE_CODE
-
+from src.domain.nbb import SOURCE_CODE, extract_from_jsonxbrl
+from src.domain.nbb.extractor import extract_filing_and_lines_from_parsed
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -111,7 +110,7 @@ def test_lines_only_current_period():
 def test_line_data_type_classification():
     """Workers count should be met:dec1, others met:am1."""
     result = extract_from_jsonxbrl(SYNTHETIC_JSONXBRL, SYNTHETIC_FILING_META, CANARY_PARTY_ID)
-    by_code = {l["pcmn_code"]: l for l in result["lines"]}
+    by_code = {line["pcmn_code"]: line for line in result["lines"]}
 
     assert by_code["70"]["data_type"] == "met:am1"
     assert by_code["9087"]["data_type"] == "met:dec1"  # workers count
@@ -227,7 +226,7 @@ def test_bas_takes_priority_when_both_present():
 # Tests for extract_filing_and_lines_from_parsed (worker entry point)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from src.domain.nbb.extractor import extract_filing_and_lines_from_parsed
+
 
 SYNTHETIC_PARSED = {
     "year":         "2024",
@@ -272,7 +271,7 @@ def test_parsed_entry_point_skips_count_markers():
         filing_reference="2025-00231176",
         party_id=CANARY_PARTY_ID,
     )
-    pcmn_codes = [l["pcmn_code"] for l in lines]
+    pcmn_codes = [line["pcmn_code"] for line in lines]
     assert "_count_9087" not in pcmn_codes
     assert len(lines) == 4  # 70, 9901, 9904, 9087 (the _count_9087 marker is skipped)
 
@@ -284,7 +283,7 @@ def test_parsed_entry_point_classifies_data_type():
         filing_reference="2025-00231176",
         party_id=CANARY_PARTY_ID,
     )
-    by_code = {l["pcmn_code"]: l for l in lines}
+    by_code = {line["pcmn_code"]: line for line in lines}
     assert by_code["70"]["data_type"] == "met:am1"
     assert by_code["9087"]["data_type"] == "met:dec1"
 

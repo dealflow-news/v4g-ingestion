@@ -39,7 +39,7 @@ import time
 from typing import Any
 from uuid import UUID
 
-from src.canonical.financials import FinancialFact, FilingRecord, FinancialLine
+from src.canonical.financials import FilingRecord, FinancialFact, FinancialLine
 from src.persistence.supabase import admin_client
 
 log = logging.getLogger(__name__)

@@ -15,9 +15,8 @@ then writes via Supabase client.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from typing import Optional
 from uuid import UUID
 
 from .parser import parse_xbrl
@@ -79,7 +78,7 @@ def _period_label(fy_end: date, period_months: int, period_flag: str) -> str:
     return base
 
 
-def _parse_iso_date(s: str) -> Optional[date]:
+def _parse_iso_date(s: str) -> date | None:
     if not s:
         return None
     try:
@@ -226,7 +225,7 @@ def extract_from_jsonxbrl(
                 counts_for_kpi[code_str] = amount
 
     # ── Evidence aggregate (KPI computation in EUR millions) ─────────────
-    def _first_hit_eur_m(codes: tuple[str, ...]) -> Optional[float]:
+    def _first_hit_eur_m(codes: tuple[str, ...]) -> float | None:
         """Try each code in priority order; return first hit as EUR millions."""
         for c in codes:
             v = amounts_for_kpi.get(c)
@@ -234,7 +233,7 @@ def extract_from_jsonxbrl(
                 return float(v / Decimal(1_000_000))
         return None
 
-    def _first_hit_decimal(codes: tuple[str, ...]) -> Optional[Decimal]:
+    def _first_hit_decimal(codes: tuple[str, ...]) -> Decimal | None:
         for c in codes:
             v = amounts_for_kpi.get(c)
             if v is not None:
@@ -375,10 +374,7 @@ def extract_from_xbrl_xml(
         _xbrl_el, pcmn, _label, section = key
 
         # Determine data_type — only true counts (9087/9088) get dec1
-        if pcmn in COUNT_CODES:
-            data_type = "met:dec1"
-        else:
-            data_type = "met:am1"
+        data_type = "met:dec1" if pcmn in COUNT_CODES else "met:am1"
 
         try:
             amount = Decimal(str(val))
@@ -403,14 +399,14 @@ def extract_from_xbrl_xml(
             counts_for_kpi[pcmn] = amount
 
     # Reuse same KPI derivation as Lane A (multi-code fallback)
-    def _first_hit_eur_m_b(codes: tuple[str, ...]) -> Optional[float]:
+    def _first_hit_eur_m_b(codes: tuple[str, ...]) -> float | None:
         for c in codes:
             v = amounts_for_kpi.get(c)
             if v is not None:
                 return float(v / Decimal(1_000_000))
         return None
 
-    def _first_hit_decimal_b(codes: tuple[str, ...]) -> Optional[Decimal]:
+    def _first_hit_decimal_b(codes: tuple[str, ...]) -> Decimal | None:
         for c in codes:
             v = amounts_for_kpi.get(c)
             if v is not None:
@@ -485,7 +481,15 @@ __all__ = [
     "extract_from_xbrl_xml",
     "SOURCE_CODE",
     "COUNT_CODES",
-    "KPI_MAPPING",
+    "KPI_REVENUE",
+    "KPI_EBIT",
+    "KPI_NET_INCOME",
+    "KPI_TOTAL_ASSETS",
+    "KPI_TOTAL_EQUITY",
+    "KPI_CASH",
+    "KPI_INCOME_TAX",
+    "KPI_FIN_LT_DEBT",
+    "KPI_FIN_ST_DEBT",
 ]
 
 
@@ -497,7 +501,7 @@ def extract_filing_and_lines_from_parsed(
     parsed: dict,
     filing_reference: str,
     party_id: UUID | str,
-    filing_meta: Optional[dict] = None,
+    filing_meta: dict | None = None,
     loaded_by: str = "v4g-ingestion-worker",
 ) -> tuple[dict, list[dict]]:
     """Build (filing_row, lines[]) from fetcher.parse_rubrics() output.
