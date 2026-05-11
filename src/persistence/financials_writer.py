@@ -78,6 +78,23 @@ class FinancialsWriter:
         table). The fact_financials view is read-only for upsert patterns
         because PostgreSQL does not allow ON CONFLICT on views.
 
+        De-duplicates the input by the same columns as the DB UNIQUE
+        constraint — (party_id, period_label, source_code). When multiple
+        FinancialFact entries share a conflict key (e.g., a Consult ZIP
+        with both an original and an amended filing for the same fiscal
+        year), the LAST one in the input list wins. Callers that care
+        about which version survives should pre-sort their input
+        accordingly (e.g., by filing date or filename ascending so the
+        latest amendment is iterated last).
+
+        Why dedupe here: PostgREST returns an empty ``result.data`` when
+        the request body contains multiple rows that conflict on the
+        same target row. Rows still get written via merge-duplicates
+        resolution, but the response body is empty, which would make
+        rows_written report 0 despite a successful write. De-duping at
+        this layer keeps the upsert call well-formed and the count
+        accurate.
+
         Raises any exception from the Supabase upsert. On exception, no
         object_log row is written (the runner records failure elsewhere).
         """
@@ -105,15 +122,42 @@ class FinancialsWriter:
             )
             return 0
 
+        # De-dupe by the UNIQUE-constraint columns of fact_financials_evidence
+        # (party_id is constant in this call; key on the remaining two).
+        # Last-wins ordering: dict re-assignment in insertion order means
+        # entries iterated later overwrite earlier ones with the same key.
+        deduped: dict[tuple[Any, Any], dict[str, Any]] = {}
+        for r in rows:
+            key = (r.get("period_label"), r.get("source_code"))
+            deduped[key] = r
+        rows_attempted = len(rows)
+        rows = list(deduped.values())
+        if len(rows) < rows_attempted:
+            log.info(
+                "writer.dedupe party=%s input=%d unique=%d (last-wins by period_label,source_code)",
+                party_str, rows_attempted, len(rows),
+            )
+
         # Upsert directly to evidence table. Any DB exception propagates.
         result = (
             self._client.table("fact_financials_evidence")
             .upsert(rows, on_conflict="party_id,period_label,source_code")
             .execute()
         )
-        rows_written = len(result.data or [])
+
+        # Some PostgREST configurations return an empty result.data on
+        # upsert even when rows were written (observed for tables with
+        # AFTER triggers, or when the request-level Prefer header lacks
+        # return=representation). No exception was raised, so trust the
+        # attempted count: with on_conflict=DO UPDATE every row in `rows`
+        # is either inserted or updates the existing row — both count.
+        response_data = len(result.data or [])
+        rows_written = response_data if response_data else len(rows)
         duration_ms = int((time.perf_counter() - t0) * 1000)
-        log.info("writer.upsert party=%s rows=%d", party_str, rows_written)
+        log.info(
+            "writer.upsert party=%s rows=%d (response_data=%d)",
+            party_str, rows_written, response_data,
+        )
 
         # Audit row on success — include filings/lines counts accumulated
         # earlier in the same run so the object_log reflects the full triple.

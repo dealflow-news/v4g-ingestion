@@ -10,9 +10,20 @@ Workflow:
         auto-create stub if missing).
      e. For each subsequent file, ensure KBO matches the first; reject
         mixed-company ZIPs (the NBB Consult export is per-company by design).
-  3. Per pfs file: aggregate_year -> FinancialFact, extract_filing_and_lines
+  3. Sort parsed files by filename. NBB names follow <YYYY>-<NNNNNNNN>.xbrl
+     where YYYY is the deposit year; sorting ascending puts later
+     amendments after their originals, which matters for step 5.
+  4. Per pfs file: aggregate_year -> FinancialFact, extract_filing_and_lines
      -> FilingRecord + FinancialLines, writer.write_filing -> write_lines.
-  4. After all files: writer.write_facts bulk upsert.
+     The actual line-write count from write_lines is accumulated into
+     result.lines_total (authoritative — what's in DB, not what parser saw).
+  5. After all files: writer.write_facts bulk upsert. The writer dedupes
+     internally on (party_id, period_label, source_code) keeping the LAST
+     entry iterated — combined with the sort in step 3 this gives
+     "latest amendment wins" for fiscal years with multiple filings
+     (e.g., AB LENS FY2012 has filings 2013-61300007 and 2014-31000579;
+     the 2014 amendment survives in evidence; both are preserved in
+     fact_filings + fact_financials_lines for audit).
 
 Returns an IngestResult dict with per-file outcomes for the UI to render.
 
@@ -34,7 +45,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
-from zipfile import BadZipFile, ZipFile
+from zipfile import ZipFile
 
 from src.canonical.financials import FilingRecord, FinancialFact, FinancialLine
 from src.domain.nbb.aggregator import aggregate_year
@@ -136,10 +147,9 @@ def ingest_uploaded_zip(
         uploaded_filename, len(zip_bytes), run_id,
     )
 
-    try:
-        zf = ZipFile(io.BytesIO(zip_bytes))
-    except BadZipFile:
-        raise
+    # BadZipFile from the constructor propagates as-is; the route handler
+    # catches it and returns 400 to the user.
+    zf = ZipFile(io.BytesIO(zip_bytes))
 
     # First pass: collect .xbrl members
     members = [
@@ -241,6 +251,14 @@ def ingest_uploaded_zip(
                 f"expected {kbo} (from {first_fname!r})"
             )
 
+    # Sort by filename so the per-file write order is deterministic. NBB
+    # filenames are <YYYY>-<NNNNNNNN>.xbrl where YYYY is the deposit year;
+    # sorting ascending puts later amendments after their originals. The
+    # writer.write_facts dedupes by period_label last-wins, so this sort
+    # ensures the surviving evidence row comes from the latest amendment
+    # for any given fiscal year.
+    parsed_pfs.sort(key=lambda t: t[0])
+
     # Stage 4: per-file aggregate -> extract -> write_filing -> write_lines
     # The writer keeps a running tally of filings/lines for the eventual
     # facts-write object_log entry (same pattern as W8-worker).
@@ -249,7 +267,7 @@ def ingest_uploaded_zip(
 
     for fname, parsed in parsed_pfs:
         try:
-            period_label, pcmn_count = _ingest_one_file(
+            period_label, pcmn_count, line_count = _ingest_one_file(
                 parsed, party_id, writer, facts,
             )
             result.outcomes.append(FileOutcome(
@@ -258,6 +276,7 @@ def ingest_uploaded_zip(
             ))
             result.files_ingested += 1
             result.filings_written += 1
+            result.lines_total += line_count
         except Exception as e:
             log.exception("zip_ingest.write_failed file=%s", fname)
             result.outcomes.append(FileOutcome(
@@ -266,7 +285,8 @@ def ingest_uploaded_zip(
             ))
             result.files_failed += 1
 
-    # Stage 5: bulk write facts
+    # Stage 5: bulk write facts. The writer dedupes by
+    # (period_label, source_code) internally — see write_facts docstring.
     try:
         result.facts_written = writer.write_facts(party_id=party_id, facts=facts)
     except Exception as e:
@@ -277,17 +297,12 @@ def ingest_uploaded_zip(
             if o.status == "ingested":
                 o.reason = f"facts bulk write failed: {e}"
 
-    # Lines total: sum of pcmn_count is a parser-side count; actual writes
-    # may differ if the extractor filters. For now we report the parser
-    # count; the writer's logs hold the authoritative line counts.
-    result.lines_total = sum(
-        o.pcmn_count for o in result.outcomes if o.status == "ingested"
-    )
-
     log.info(
-        "zip_ingest.complete run_id=%s total=%d ingested=%d skipped=%d failed=%d",
+        "zip_ingest.complete run_id=%s total=%d ingested=%d skipped=%d failed=%d "
+        "filings=%d lines=%d facts=%d",
         run_id, result.files_total, result.files_ingested,
         result.files_skipped, result.files_failed,
+        result.filings_written, result.lines_total, result.facts_written,
     )
     return result.to_dict()
 
@@ -297,14 +312,19 @@ def _ingest_one_file(
     party_id: UUID,
     writer: FinancialsWriter,
     facts: list[FinancialFact],
-) -> tuple[str | None, int]:
+) -> tuple[str | None, int, int]:
     """Process one parsed XBRL file: aggregate, extract, write filing+lines.
 
     Mirrors the per-year loop body in nbb_financials.run_for_party. Reuses
     the same aggregator + extractor + writer (no duplication of business
     logic across the Fetch and Upload flows).
 
-    Returns (period_label, pcmn_count_in_parsed).
+    Returns:
+        (period_label, pcmn_count, line_count) — where pcmn_count is the
+        number of PCMN codes the parser extracted (UI-facing "27 codes" type
+        metric) and line_count is the actual number of rows written to
+        fact_financials_lines (authoritative; what's in DB). These are
+        often equal but can diverge if the extractor adds/filters lines.
     """
     fy_end_str = parsed.get("fy_end")
     fy_start_str = parsed.get("fy_start")
@@ -346,11 +366,14 @@ def _ingest_one_file(
     filing = FilingRecord(**filing_dict)
     lines = [FinancialLine(**ln) for ln in lines_dicts]
 
-    # Step 3: write filing -> lines (FK ordering matters)
+    # Step 3: write filing -> lines (FK ordering matters). Capture the
+    # writer's actual line-write count rather than trusting len(lines):
+    # write_lines does DELETE-then-INSERT and reports rows written by
+    # the INSERT call — that's the authoritative number.
     filing_id = writer.write_filing(filing)
-    writer.write_lines(filing_id, lines)
+    line_count = writer.write_lines(filing_id, lines)
 
-    return period_label, len(codes)
+    return period_label, len(codes), line_count
 
 
 def _str_to_date(s: str | None) -> date | None:
