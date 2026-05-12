@@ -198,6 +198,15 @@
     color: var(--text-primary);
     font-weight: 500;
   }
+  .sub-btn[disabled],
+  .sub-btn[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .sub-btn[disabled]:hover::after,
+  .sub-btn[aria-disabled="true"]:hover::after {
+    /* Tooltip uses native title attribute -- no extra CSS needed */
+  }
   .hidden { display: none !important; }
   .spinner {
     display: inline-block;
@@ -292,18 +301,19 @@
         <div class="field">
           <label>Format</label>
           <div class="sub-seg" role="tablist" aria-label="Export format">
-            <button type="button" class="sub-btn" data-format="simple" role="tab" aria-selected="true">Simple</button>
+            <button type="button" class="sub-btn" data-format="screening" role="tab" aria-selected="true">Screening</button>
             <button type="button" class="sub-btn" data-format="analyst" role="tab" aria-selected="false">Analyst</button>
+            <button type="button" class="sub-btn" data-format="valuation" role="tab" aria-selected="false" aria-disabled="true" disabled title="Coming soon — V4G internal pipeline">Valuation</button>
           </div>
           <p class="helper" id="format-helper">
-            <strong>Simple</strong> · 10-yr P&L + BS overview + KPIs.
+            <strong>Screening</strong> · M&amp;A first-cut readout · snapshot, trend, 6 ratios with Gauss benchmark, flags, coverage quality.
           </p>
         </div>
         <div class="field">
           <label for="export-years">Year range</label>
           <input id="export-years" name="years" type="number" value="10" min="1" max="20" style="width: 100px;">
         </div>
-        <input type="hidden" id="export-format" name="format" value="simple">
+        <input type="hidden" id="export-format" name="format" value="screening">
         <button type="submit" class="action action-primary">⬇  Download Excel</button>
       </form>
       <div id="export-error" class="hidden" style="margin-top: 1rem;">
@@ -335,13 +345,22 @@
   const helper = document.getElementById("format-helper");
   const exportFormat = document.getElementById("export-format");
   const helpText = {
-    simple:  "<strong>Simple</strong> · 10-yr P&L + BS overview + KPIs.",
-    analyst: "<strong>Analyst</strong> · Simple sheets + Filings metadata + Detail tab per filing (~280 PCMN codes).",
+    screening: "<strong>Screening</strong> · M&amp;A first-cut readout · snapshot, trend, 6 ratios with Gauss benchmark, flags, coverage quality.",
+    analyst:   "<strong>Analyst</strong> · PCMN-detailed export · Info + Yearly_Review (~80 codes × N years) + Filings metadata.",
+    valuation: "<strong>Valuation</strong> · Coming soon — V4G internal pipeline (normalized EBITDA, multiples, DCF inputs).",
   };
   subBtns.forEach(btn => {
     btn.addEventListener("click", () => {
+      // Skip disabled buttons — they're stubs for upcoming formats
+      if (btn.hasAttribute("disabled") || btn.getAttribute("aria-disabled") === "true") {
+        return;
+      }
       const fmt = btn.dataset.format;
-      subBtns.forEach(b => b.setAttribute("aria-selected", b === btn ? "true" : "false"));
+      subBtns.forEach(b => {
+        if (!b.hasAttribute("disabled") && b.getAttribute("aria-disabled") !== "true") {
+          b.setAttribute("aria-selected", b === btn ? "true" : "false");
+        }
+      });
       helper.innerHTML = helpText[fmt];
       exportFormat.value = fmt;
     });
@@ -579,6 +598,24 @@
         <span>${filings} filings · ${lines.toLocaleString()} lines · ${facts} evidence</span>
       </div>
     `;
+
+    // Warning banner: filings/lines wrote but evidence didn't.
+    // Surfaces silent bulk-write failures so the user knows the upload
+    // is partial (e.g. PostgreSQL ON CONFLICT duplicate-key violations
+    // when multiple filings cover the same FY). The reason on the
+    // ingested outcomes carries the actual exception text.
+    if (ingested > 0 && facts === 0) {
+      const firstReason = (outcomes.find(o => o.status === "ingested" && o.reason) || {}).reason;
+      html += `
+        <div style="margin-top:8px;padding:8px 12px;border-radius:var(--radius-md);
+                    background:#FCEBEB;color:var(--color-danger);font-size:12px;">
+          <strong>⚠ Evidence write failed</strong> — filings and lines were written,
+          but the bulk evidence upsert did not. Inspect the server logs for
+          <code>zip_ingest.facts_bulk_write_failed</code>.
+          ${firstReason ? `<div style="margin-top:4px;font-family:monospace;font-size:11px;">${escapeHtml(firstReason)}</div>` : ""}
+        </div>
+      `;
+    }
 
     // Per-file outcomes (collapsible)
     if (outcomes.length > 0) {
