@@ -50,7 +50,6 @@ from flask import (
 
 from src.persistence.supabase import admin_client
 from src.services.analyst_export import AnalystExporter, AnalystExportError
-from src.services.excel_export import ExcelExporter, ExportError
 from src.services.screening_export import ScreeningExporter, ScreeningExportError
 
 log = logging.getLogger(__name__)
@@ -259,9 +258,9 @@ def export() -> Any:
 
     Format dispatch:
 
-    - ``simple``     → ExcelExporter (legacy 4-sheet P&L / BS / KPIs output).
-                       Slated for retirement once ``screening`` validated
-                       in production -- see BL "ExcelExporter mode cleanup".
+    - ``simple``     → ScreeningExporter (alias for ``screening``; preserved
+                       for URL backward compatibility after the legacy
+                       ExcelExporter was retired).
     - ``analyst``    → AnalystExporter (PCMN-detailed Info + Yearly_Review
                        + Filings sheets; ~80 codes × N years).
     - ``screening``  → ScreeningExporter (single-sheet M&A first-cut readout
@@ -296,21 +295,15 @@ def export() -> Any:
                 party_id=party_id,
                 year_count=years,
             ).fetch()
-        elif fmt_raw == "screening":
+        else:
+            # format=simple and format=screening both route here
             exporter = ScreeningExporter(
                 client=admin_client(),
                 party_id=party_id,
                 year_limit=years,
             ).fetch()
-        else:
-            exporter = ExcelExporter(
-                client=admin_client(),
-                party_id=party_id,
-                mode="simple",
-                year_limit=years,
-            ).fetch()
         content = exporter.build()
-    except (ExportError, AnalystExportError, ScreeningExportError) as e:
+    except (AnalystExportError, ScreeningExportError) as e:
         log.info(
             "tools.export · no data · kbo=%s mode=%s reason=%s",
             vat, fmt_raw, e,
