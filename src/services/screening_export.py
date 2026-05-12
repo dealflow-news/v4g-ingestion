@@ -34,11 +34,11 @@ is the v1 substitute liquidity signal.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import BytesIO
 from math import isfinite
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
