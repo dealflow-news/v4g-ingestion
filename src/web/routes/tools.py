@@ -50,6 +50,7 @@ from flask import (
 
 from src.persistence.supabase import admin_client
 from src.services.excel_export import ExcelExporter, ExportError
+from src.services.analyst_export import AnalystExporter, AnalystExportError
 
 log = logging.getLogger(__name__)
 
@@ -273,15 +274,25 @@ def export() -> Any:
         return jsonify({"error": f"KBO {vat} not found"}), 404
 
     try:
-        exporter = ExcelExporter(
-            client=admin_client(),
-            party_id=party_id,
-            mode=fmt_raw,  # type: ignore[arg-type]
-            year_limit=years,
-        ).fetch()
+        if fmt_raw == "analyst":
+            exporter = AnalystExporter(
+                client=admin_client(),
+                party_id=party_id,
+                year_count=years,
+            ).fetch()
+        else:
+            exporter = ExcelExporter(
+                client=admin_client(),
+                party_id=party_id,
+                mode="simple",
+                year_limit=years,
+            ).fetch()
         content = exporter.build()
-    except ExportError as e:
-        log.info("tools.export · no data · kbo=%s reason=%s", vat, e)
+    except (ExportError, AnalystExportError) as e:
+        log.info(
+            "tools.export · no data · kbo=%s mode=%s reason=%s",
+            vat, fmt_raw, e,
+        )
         return jsonify({"error": str(e)}), 404
 
     filename = exporter.suggest_filename()
