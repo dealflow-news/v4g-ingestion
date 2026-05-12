@@ -25,6 +25,7 @@ dependencies = [
     # Utils
     "python-dotenv>=1.0.0",
     "click>=8.1.7",
+    "lxml>=5.0",
  ]
 
 [project.optional-dependencies]
