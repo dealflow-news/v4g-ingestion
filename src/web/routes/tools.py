@@ -49,8 +49,8 @@ from flask import (
 )
 
 from src.persistence.supabase import admin_client
-from src.services.excel_export import ExcelExporter, ExportError
 from src.services.analyst_export import AnalystExporter, AnalystExportError
+from src.services.excel_export import ExcelExporter, ExportError
 from src.services.screening_export import ScreeningExporter, ScreeningExportError
 
 log = logging.getLogger(__name__)

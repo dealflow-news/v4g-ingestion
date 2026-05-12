@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
 from uuid import UUID
@@ -354,7 +354,7 @@ class AnalystExporter:
             ("Analyst Codes",       str(len(d.codes))),
             ("Amount Cells",        str(sum(len(v) for v in d.amounts.values()))),
             ("",                    ""),
-            ("Generated At",        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")),
+            ("Generated At",        datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")),
             ("Generator",           "Golden Safe AnalystExporter v1"),
         ]
         for i, (label, value) in enumerate(rows, start=3):
@@ -381,7 +381,7 @@ class AnalystExporter:
         # Row 2: KBO + generated timestamp
         meta = (
             f"KBO: {d.party.primary_kbo or '-'}  -  "
-            f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  -  "
+            f"Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}  -  "
             f"Amounts in EUR thousands; counts (FTE, hours) shown as integers"
         )
         ws.cell(row=2, column=1, value=meta).font = FOOTER_FONT

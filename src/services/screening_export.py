@@ -34,16 +34,16 @@ is the v1 substitute liquidity signal.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from math import isfinite
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 log = logging.getLogger(__name__)
@@ -97,45 +97,45 @@ class FlagRule:
     severity: str         # 'red' / 'yellow' / 'info'
     label: str
     description: str
-    condition: Callable[[dict, dict, "_Coverage"], bool]
+    condition: Callable[[dict, dict, _Coverage], bool]
 
 
-def _is_negative_equity(latest: dict, _ratios: dict, _cov: "_Coverage") -> bool:
+def _is_negative_equity(latest: dict, _ratios: dict, _cov: _Coverage) -> bool:
     eq = latest.get("total_equity_eur_m")
     return eq is not None and eq < 0
 
 
-def _is_leverage_high(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool:
+def _is_leverage_high(_latest: dict, ratios: dict, _cov: _Coverage) -> bool:
     nd_ebitda = ratios.get("net_debt_to_ebitda")
     return nd_ebitda is not None and nd_ebitda > 4.0
 
 
-def _is_leverage_elevated(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool:
+def _is_leverage_elevated(_latest: dict, ratios: dict, _cov: _Coverage) -> bool:
     nd_ebitda = ratios.get("net_debt_to_ebitda")
     return nd_ebitda is not None and 2.5 < nd_ebitda <= 4.0
 
 
-def _is_ebitda_thin(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool:
+def _is_ebitda_thin(_latest: dict, ratios: dict, _cov: _Coverage) -> bool:
     margin = ratios.get("ebitda_margin")
     return margin is not None and margin < 0.05
 
 
-def _is_ebitda_negative(latest: dict, _ratios: dict, _cov: "_Coverage") -> bool:
+def _is_ebitda_negative(latest: dict, _ratios: dict, _cov: _Coverage) -> bool:
     eb = latest.get("ebitda_eur_m")
     return eb is not None and eb < 0
 
 
-def _is_revenue_declining(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool:
+def _is_revenue_declining(_latest: dict, ratios: dict, _cov: _Coverage) -> bool:
     cagr = ratios.get("revenue_cagr_3y")
     return cagr is not None and cagr < -0.05
 
 
-def _is_ebitda_declining(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool:
+def _is_ebitda_declining(_latest: dict, ratios: dict, _cov: _Coverage) -> bool:
     cagr = ratios.get("ebitda_cagr_3y")
     return cagr is not None and cagr < -0.10
 
 
-def _is_solvability_weak(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool:
+def _is_solvability_weak(_latest: dict, ratios: dict, _cov: _Coverage) -> bool:
     """Solvability more than 2 sigma below Belgian KMO benchmark."""
     s = ratios.get("solvability")
     if s is None:
@@ -145,16 +145,16 @@ def _is_solvability_weak(_latest: dict, ratios: dict, _cov: "_Coverage") -> bool
     return z < -2.0
 
 
-def _is_revenue_missing(latest: dict, _ratios: dict, cov: "_Coverage") -> bool:
+def _is_revenue_missing(latest: dict, _ratios: dict, cov: _Coverage) -> bool:
     """Revenue is NULL in the latest year (common with verkort/micro filings)."""
     return latest.get("revenue_eur_m") is None and cov.latest_year is not None
 
 
-def _is_multi_source(_latest: dict, _ratios: dict, cov: "_Coverage") -> bool:
+def _is_multi_source(_latest: dict, _ratios: dict, cov: _Coverage) -> bool:
     return len(cov.sources_used) > 1
 
 
-def _is_partial_coverage(_latest: dict, _ratios: dict, cov: "_Coverage") -> bool:
+def _is_partial_coverage(_latest: dict, _ratios: dict, cov: _Coverage) -> bool:
     return cov.years_covered_count < cov.years_requested
 
 
@@ -554,7 +554,7 @@ class ScreeningExporter:
         row += 1
         meta = (
             f"KBO: {d.party.primary_kbo or '-'}  ·  "
-            f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}  ·  "
+            f"Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}  ·  "
             f"Years requested: {self.year_limit}"
         )
         ws.cell(row=row, column=1, value=meta).font = META_FONT
