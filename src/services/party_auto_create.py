@@ -23,6 +23,32 @@ def normalize_kbo(kbo: str) -> str:
     return s.zfill(10) if 9 <= len(s) <= 10 else s
 
 
+def _normalize_for_match(name: str) -> str:
+    """Best-effort party-name normalization for dedup/match purposes.
+
+    Lowercase, strip non-alphanumeric (keeping spaces), collapse
+    whitespace. Approximates the convention used elsewhere in the
+    schema (party_registry.normalized_name is NOT NULL and serves as
+    a match key for gs_dedup_candidates and search lookups). Examples:
+      "TRIBEL METALS"          -> "tribel metals"
+      "Acme N.V. (Belgium)"    -> "acme n v belgium"
+      "Société Générale SA"    -> "société générale sa"
+
+    Note: this is intentionally less aggressive than full legal-form
+    stripping. Anything that needs canonical-form matching should run
+    through fn_normalize_name() in the DB layer; this client-side
+    function only exists to satisfy the NOT NULL constraint when
+    inserting a P3 stub. Later enrichment/canonicalisation passes will
+    overwrite normalized_name via the DB function as needed.
+    """
+    if not name:
+        return ""
+    s = name.lower().strip()
+    s = re.sub(r"[^\w\s]", " ", s, flags=re.UNICODE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def resolve_or_create_party(
     supabase,
     kbo: str,
@@ -34,7 +60,8 @@ def resolve_or_create_party(
 
     Returns (party_id, was_created). On creation:
       - party_registry: party_type='company', country_iso2='BE',
-                        status='Active', enrichment_tier='P3'
+                        status='Active', enrichment_tier='P3',
+                        normalized_name = _normalize_for_match(display_name)
       - party_identifiers: id_type='KBO', is_primary=true
       - party_profile: auto-created via existing DB trigger
 
@@ -80,6 +107,7 @@ def resolve_or_create_party(
     party_row = {
         "display_name":    name,
         "legal_name":      name,
+        "normalized_name": _normalize_for_match(name),
         "party_type":      "company",
         "country_iso2":    "BE",
         "status":          "Active",
