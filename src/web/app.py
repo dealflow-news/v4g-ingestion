@@ -46,7 +46,7 @@ def create_app() -> Flask:
     app.register_blueprint(financials.bp)
     app.register_blueprint(tools.bp)
     app.register_blueprint(auth.bp)
-    
+
     # Auth gate — installed last so all routes (including blueprints) are
     # covered. Feature-flagged via AUTH_ENABLED env var; off in local dev.
     app.before_request(auth.check_auth)

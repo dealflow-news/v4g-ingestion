@@ -170,7 +170,7 @@ def _detect_eur_unit_ids(root) -> set[str]:
             prefix, local = text.split(":", 1)
             prefix_uri = root.nsmap.get(prefix)
             # Match either by exact namespace URI OR by canonical fallback
-            if (prefix_uri == iso_pref_uri or prefix_uri == ISO4217_URI) and local == "EUR":
+            if prefix_uri in (iso_pref_uri, ISO4217_URI) and local == "EUR":
                 eur_ids.add(uid)
         elif text == "EUR":
             # Bare value (rare): accept it

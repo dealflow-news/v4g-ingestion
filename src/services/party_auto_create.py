@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
 from uuid import UUID
 
 log = logging.getLogger(__name__)
@@ -28,8 +27,8 @@ def resolve_or_create_party(
     supabase,
     kbo: str,
     *,
-    display_name: Optional[str] = None,
-    legal_form_code: Optional[str] = None,
+    display_name: str | None = None,
+    legal_form_code: str | None = None,
 ) -> tuple[UUID, bool]:
     """Look up party by KBO; create a stub if missing.
 
