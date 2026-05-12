@@ -144,7 +144,10 @@ class AnalystExporter:
                 f"No filings found for party_id={self.party_id}"
             )
         codes = self._fetch_codes()
-        amounts = self._fetch_amounts([f.filing_id for f in filings])
+        amounts = self._fetch_amounts(
+            filing_ids=[f.filing_id for f in filings],
+            pcmn_codes=[c.pcmn_code for c in codes],
+        )
 
         # Pivot: amounts[pcmn_code][filing_id] = amount_eur
         pivot: dict[str, dict[str, float]] = {}
@@ -315,17 +318,71 @@ class AnalystExporter:
         codes.sort(key=lambda c: (sec_rank[c.section], c.display_order))
         return codes
 
-    def _fetch_amounts(self, filing_ids: list[str]) -> list[dict]:
-        """Fetch fact_financials_lines for the selected filing_ids."""
-        if not filing_ids:
+    def _fetch_amounts(
+        self, filing_ids: list[str], pcmn_codes: list[str],
+    ) -> list[dict]:
+        """Fetch fact_financials_lines for the selected filings, then filter
+        to analyst pcmn_codes Python-side.
+
+        BUG HISTORY (v1, fixed in v2):
+        v1 attempted to pre-filter codes server-side via ``.in_("pcmn_code", ...)``
+        in the same query. With ~80 codes the resulting URL was apparently long
+        enough that PostgREST silently dropped the filter (or supabase-py
+        truncated it), so every line of every filing came back. For m02-f
+        filings that's ~280 lines each = ~1400 rows for a 5-year export,
+        which hit PostgREST's default db-max-rows=1000 cap. The pagination
+        loop's second .range() request did fire but the first page already
+        truncated mid-filing, producing the classic symptom: one filing
+        (whichever sorted last in filing_id alphabetical order) had its
+        higher-alphabet pcmn_codes silently dropped -- all P&L (60s, 70s)
+        and workforce (9000s) codes blank in the analyst output.
+
+        v2 (this version): one server query per page, NO pcmn_code filter
+        server-side. Code filtering happens in Python after the rows are in
+        memory. Same total bytes over the wire (~1400 rows for a typical
+        5-filing m02-f export), but reliably across pages.
+
+        Defensive measures:
+        - ORDER BY (filing_id, pcmn_code) for deterministic pagination
+        - Pagination loop with explicit page_size and safety stop
+        - Python-side code filter via set lookup (O(1) per row)
+        """
+        if not filing_ids or not pcmn_codes:
             return []
-        resp = (
-            self.client.table("fact_financials_lines")
-            .select("filing_id, pcmn_code, amount_eur")
-            .in_("filing_id", filing_ids)
-            .execute()
+        code_set = set(pcmn_codes)
+        all_rows: list[dict] = []
+        page_size = 1000
+        offset = 0
+        while True:
+            resp = (
+                self.client.table("fact_financials_lines")
+                .select("filing_id, pcmn_code, amount_eur")
+                .in_("filing_id", filing_ids)
+                .order("filing_id")
+                .order("pcmn_code")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = resp.data or []
+            all_rows.extend(rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
+            if offset > 200_000:  # safety: 200k lines = ~700 filings worth
+                log.warning(
+                    "analyst_export._fetch_amounts: stopped at %d rows; "
+                    "filing_ids=%d codes=%d",
+                    offset, len(filing_ids), len(pcmn_codes),
+                )
+                break
+        # Filter to analyst codes Python-side -- the only reliable place.
+        matched = [r for r in all_rows if r.get("pcmn_code") in code_set]
+        log.info(
+            "analyst_export._fetch_amounts: %d filings x %d codes -> "
+            "%d raw rows -> %d matched",
+            len(filing_ids), len(pcmn_codes), len(all_rows), len(matched),
         )
-        return resp.data or []
+        return matched
 
     # ------------------------------------------------------- sheet builders
 
