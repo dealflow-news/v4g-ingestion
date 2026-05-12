@@ -461,16 +461,23 @@ class ScreeningExporter:
         return result
 
     def _analyze_coverage(self, evidence: list[_EvidenceRow]) -> _Coverage:
-        years_covered = sorted({e.year for e in evidence if e.year is not None}, reverse=True)
+        # Restrict to user-visible window (year_limit). The extra rows fetched
+        # for CAGR look-back are internal plumbing and should not appear in
+        # the coverage report -- otherwise the user sees "7 of 5 requested"
+        # which is confusing.
+        user_visible = evidence[: self.year_limit]
+        years_covered = sorted(
+            {e.year for e in user_visible if e.year is not None}, reverse=True,
+        )
         latest = years_covered[0] if years_covered else None
         # "requested" range = year_limit years ending at latest
         expected = list(range(latest - self.year_limit + 1, latest + 1)) if latest else []
         years_missing = sorted(set(expected) - set(years_covered))
-        sources = sorted({e.source_code for e in evidence if e.source_code})
+        sources = sorted({e.source_code for e in user_visible if e.source_code})
         # Missing fields in latest year
         missing_fields: list[str] = []
-        if evidence:
-            latest_ev = evidence[0]
+        if user_visible:
+            latest_ev = user_visible[0]
             for field_name, value in [
                 ("revenue", latest_ev.revenue_eur_m),
                 ("ebitda",  latest_ev.ebitda_eur_m),
