@@ -51,12 +51,15 @@ from flask import (
 from src.persistence.supabase import admin_client
 from src.services.excel_export import ExcelExporter, ExportError
 from src.services.analyst_export import AnalystExporter, AnalystExportError
+from src.services.screening_export import ScreeningExporter, ScreeningExportError
 
 log = logging.getLogger(__name__)
 
 bp = Blueprint("tools", __name__, url_prefix="/tools")
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+_SUPPORTED_FORMATS: tuple[str, ...] = ("simple", "analyst", "screening")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,19 +251,32 @@ def export() -> Any:
     Query params:
 
     - ``vat``    — required, KBO (with or without BE prefix, dots, spaces)
-    - ``format`` — ``simple`` (default) | ``analyst``
+    - ``format`` — ``simple`` (default) | ``analyst`` | ``screening``
     - ``years``  — int, 1-20, default 10
 
     Returns the file as an attachment; the response is fully buffered in
     memory (≪ 1 MB typical), so streaming/temp-files aren't needed.
+
+    Format dispatch:
+
+    - ``simple``     → ExcelExporter (legacy 4-sheet P&L / BS / KPIs output).
+                       Slated for retirement once ``screening`` validated
+                       in production -- see BL "ExcelExporter mode cleanup".
+    - ``analyst``    → AnalystExporter (PCMN-detailed Info + Yearly_Review
+                       + Filings sheets; ~80 codes × N years).
+    - ``screening``  → ScreeningExporter (single-sheet M&A first-cut readout
+                       with snapshot, trend, ratios + Gauss benchmark,
+                       flags, coverage quality).
     """
     vat = _normalize_vat(request.args.get("vat", ""))
     if not vat or not vat.isdigit() or len(vat) != 10:
         return jsonify({"error": "Invalid KBO — must be 10 digits"}), 400
 
     fmt_raw = request.args.get("format", "simple").lower()
-    if fmt_raw not in ("simple", "analyst"):
-        return jsonify({"error": "format must be 'simple' or 'analyst'"}), 400
+    if fmt_raw not in _SUPPORTED_FORMATS:
+        return jsonify({
+            "error": f"format must be one of: {', '.join(_SUPPORTED_FORMATS)}",
+        }), 400
 
     try:
         years = int(request.args.get("years", 10))
@@ -280,6 +296,12 @@ def export() -> Any:
                 party_id=party_id,
                 year_count=years,
             ).fetch()
+        elif fmt_raw == "screening":
+            exporter = ScreeningExporter(
+                client=admin_client(),
+                party_id=party_id,
+                year_limit=years,
+            ).fetch()
         else:
             exporter = ExcelExporter(
                 client=admin_client(),
@@ -288,7 +310,7 @@ def export() -> Any:
                 year_limit=years,
             ).fetch()
         content = exporter.build()
-    except (ExportError, AnalystExportError) as e:
+    except (ExportError, AnalystExportError, ScreeningExportError) as e:
         log.info(
             "tools.export · no data · kbo=%s mode=%s reason=%s",
             vat, fmt_raw, e,
@@ -400,7 +422,7 @@ def meta() -> tuple[Response, int]:
     """Feature flags + capability metadata for the UI."""
     return jsonify({
         "upload_enabled":   _upload_enabled(),
-        "supported_format": ["simple", "analyst"],
+        "supported_format": list(_SUPPORTED_FORMATS),
         "max_years":        20,
         "default_years":    10,
         "version":          current_app.config.get("VERSION", "0.1.0"),
